@@ -1,2 +1,3 @@
 pyTelegramBotAPI
+steam-gaurd
 flask
