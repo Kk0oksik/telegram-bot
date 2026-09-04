@@ -1,3 +1,4 @@
 pyTelegramBotAPI
-steam-gaurd
+steamguard
+pyotp
 flask
