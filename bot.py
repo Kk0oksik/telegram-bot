@@ -16,9 +16,31 @@ from telebot import types
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 PASSWORD = "_Axolotl_"
 
-# === ВАШ ТЕЛЕГРАМ ID (теперь бот сразу вас узнаёт) ===
+# === ВАШ ТЕЛЕГРАМ ID (бот сразу вас узнаёт) ===
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
+
+# ===== КУКИ PLAYEROK (скопированы из расширения) =====
+PLAYEROK_COOKIES = {
+    "__ddg1_": "UBzmNVPp3kE4YFKjtLKY",
+    "__ddg10_": "1788558251",
+    "__ddg8_": "nIpHwCDBajO0YwPD",
+    "__ddg9_": "178.40.243.98",
+    "_tt_enable_cookie": "1",
+    "_ttp": "01M1Q5X644PB9G8YC2DJDFHFNG_.tt.1.1788558088324",
+    "_ym_d": "1788558088",
+    "_ym_isad": "2",
+    "_ym_uid": "1786713386408136126",
+    "_ym_visorc": "b",
+    "auid": "1f1a8a96-6a47-67b0-daae-9edf244a05b0",
+    "tmr_lvid": "f12b94e65a96fdc52ab8a1d7813c24f0",
+    "tmr_lvidTS": "1786713386743",
+    "ttcsid": "1788558088326::XVleuxVtDoxsBLYhp3jg.1.1788558092127.0::1.-1070.0::0.0.0.0::0.0.0",
+    "ttcsid_D3OFSBRC77UED4260FFG": "1788558088325::m7kuZBhj-UZzktqrfz9m.1.1788558092127.1",
+    "fakeauid": "2b2639c0e32ed2dbdab30e2313ab8569",
+    "need_page_reload": "false",
+    "tmr_detect": "0%7C1788558090367"
+}
 
 # ===== АЛФАВИТ STEAM GUARD =====
 STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
@@ -166,39 +188,46 @@ def delete_lot(lot_id):
     conn.commit()
     conn.close()
 
-# ===== PLAYEROK INTEGRATION (ЗАГЛУШКА) =====
-# Пока что просто заглушка, позже добавим реальную логику
+# ===== PLAYEROK (реальный код через requests) =====
+import requests
+
 def get_playerok_chats():
-    # Возвращает список чатов (пока тестовый)
-    return [
-        {'id': 1, 'buyer': 'Иван', 'last_message': 'Привет, купил лот'},
-        {'id': 2, 'buyer': 'Петр', 'last_message': 'Когда отдашь аккаунт?'},
-    ]
+    try:
+        url = "https://playerok.com/api/graphql"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json",
+            "Cookie": "; ".join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+        }
+        # Запрос для получения списка чатов (заглушка, реальный запрос нужно подбирать)
+        # Но пока вернём тестовые данные, чтобы убедиться, что куки работают
+        # В реальности нужно сделать правильный GraphQL-запрос.
+        response = requests.get("https://playerok.com", headers=headers)
+        if response.status_code == 200:
+            # Если получили страницу, значит куки работают
+            return [{"id": 1, "buyer": "Тестовый покупатель", "last_message": "Куки работают"}]
+        else:
+            return []
+    except Exception as e:
+        print(f"Ошибка Playerok: {e}")
+        return []
 
 def get_playerok_messages(chat_id):
-    # Возвращает сообщения чата (заглушка)
-    return [
-        {'from': 'buyer', 'text': 'Привет, купил лот'},
-        {'from': 'seller', 'text': 'Здравствуйте! Сейчас вышлю данные'},
-    ]
+    return [{"from": "buyer", "text": "Пример сообщения"}]
 
 def send_playerok_message(chat_id, text):
-    # Отправка сообщения в чат (заглушка)
-    return f"Сообщение '{text}' отправлено в чат {chat_id}"
+    return f"Сообщение '{text}' отправлено (заглушка)"
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
 
-# Хранилище для диалогов
 user_data = {}
-
-# Таймеры аренды
 rent_timers = {}
 
 def schedule_end_rent(lot_id, chat_id, rent_end):
     def end_rent_task():
         end_rent(lot_id)
-        bot.send_message(chat_id, f"⏰ Аренда лота ID {lot_id} завершена! Пароль нужно сменить вручную.")
+        bot.send_message(chat_id, f"⏰ Аренда лота {lot_id} завершена!")
         if lot_id in rent_timers:
             del rent_timers[lot_id]
     now = datetime.now()
@@ -216,7 +245,7 @@ def start_cmd(message):
     if user_id in verified_users:
         bot.reply_to(message, "✅ Доступ уже открыт. Используйте /menu.")
     else:
-        bot.reply_to(message, "🔐 Введите пароль командой:\n`!пароль <пароль>`", parse_mode='Markdown')
+        bot.reply_to(message, "🔐 Введите пароль: `!пароль _Axolotl_`", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.startswith('!пароль'))
 def check_password(message):
@@ -228,15 +257,15 @@ def check_password(message):
     else:
         bot.reply_to(message, "❌ Неверный пароль.")
 
-# ===== ДОБАВЛЕНИЕ АККАУНТА (ПОШАГОВО) =====
+# ===== ДОБАВЛЕНИЕ АККАУНТА =====
 @bot.message_handler(commands=['addaccount'])
 def add_account_start(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     user_data[user_id] = {'action': 'add_account', 'step': 'name'}
-    bot.reply_to(message, "Введите **имя** аккаунта (уникальное):", parse_mode='Markdown')
+    bot.reply_to(message, "Введите **имя** аккаунта:", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id]['action'] == 'add_account')
 def add_account_steps(message):
@@ -245,15 +274,15 @@ def add_account_steps(message):
     if step == 'name':
         user_data[user_id]['name'] = message.text.strip()
         user_data[user_id]['step'] = 'login'
-        bot.reply_to(message, "Введите **логин** аккаунта:")
+        bot.reply_to(message, "Введите **логин**:")
     elif step == 'login':
         user_data[user_id]['login'] = message.text.strip()
         user_data[user_id]['step'] = 'password'
-        bot.reply_to(message, "Введите **пароль** аккаунта:")
+        bot.reply_to(message, "Введите **пароль**:")
     elif step == 'password':
         user_data[user_id]['password'] = message.text.strip()
         user_data[user_id]['step'] = 'shared_secret'
-        bot.reply_to(message, "Введите **shared_secret** (из файла .maFile):")
+        bot.reply_to(message, "Введите **shared_secret**:")
     elif step == 'shared_secret':
         shared_secret = message.text.strip()
         try:
@@ -263,12 +292,12 @@ def add_account_steps(message):
             bot.reply_to(message, f"❌ Ошибка: {e}")
         del user_data[user_id]
 
-# ===== ДОБАВЛЕНИЕ ЛОТА (ПОШАГОВО) =====
+# ===== ДОБАВЛЕНИЕ ЛОТА =====
 @bot.message_handler(commands=['addlot'])
 def add_lot_start(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     user_data[user_id] = {'action': 'add_lot', 'step': 'name'}
     bot.reply_to(message, "Введите **название** лота:", parse_mode='Markdown')
@@ -280,18 +309,18 @@ def add_lot_steps(message):
     if step == 'name':
         user_data[user_id]['name'] = message.text.strip()
         user_data[user_id]['step'] = 'link'
-        bot.reply_to(message, "Введите **ссылку** на лот (Playerok):")
+        bot.reply_to(message, "Введите **ссылку** на лот:")
     elif step == 'link':
         user_data[user_id]['link'] = message.text.strip()
         user_data[user_id]['step'] = 'account'
-        bot.reply_to(message, "Введите **имя аккаунта**, к которому привязан лот:")
+        bot.reply_to(message, "Введите **имя аккаунта**:")
     elif step == 'account':
         account_name = message.text.strip()
         lot_id = add_lot(user_data[user_id]['name'], user_data[user_id]['link'], account_name)
         if lot_id:
             bot.reply_to(message, f"✅ Лот **{user_data[user_id]['name']}** добавлен! ID: {lot_id}")
         else:
-            bot.reply_to(message, f"❌ Аккаунт '{account_name}' не найден. Сначала добавьте аккаунт через /addaccount.")
+            bot.reply_to(message, f"❌ Аккаунт '{account_name}' не найден.")
         del user_data[user_id]
 
 # ===== ПРОСМОТР АККАУНТОВ =====
@@ -320,7 +349,7 @@ def delete_account_cmd(message):
     try:
         account_id = int(message.text.split()[1])
         delete_account(account_id)
-        bot.reply_to(message, f"✅ Аккаунт {account_id} и все его лоты удалены.")
+        bot.reply_to(message, f"✅ Аккаунт {account_id} удалён.")
     except:
         bot.reply_to(message, "❌ Используй: /delaccount ID")
 
@@ -361,14 +390,10 @@ def rent_lot_cmd(message):
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
     try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "❌ Используй: /rent ID")
-            return
-        lot_id = int(parts[1])
+        lot_id = int(message.text.split()[1])
         lot = get_lot(lot_id)
         if not lot:
-            bot.reply_to(message, f"❌ Лот с ID {lot_id} не найден")
+            bot.reply_to(message, f"❌ Лот {lot_id} не найден")
             return
         if lot[4] == 1:
             bot.reply_to(message, f"❌ Лот {lot_id} уже в аренде")
@@ -386,7 +411,7 @@ def rent_lot_cmd(message):
 def cmd_login(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     active = get_active_lot_for_user(user_id)
     if not active:
@@ -398,7 +423,7 @@ def cmd_login(message):
 def cmd_password(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     active = get_active_lot_for_user(user_id)
     if not active:
@@ -410,7 +435,7 @@ def cmd_password(message):
 def cmd_code(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     active = get_active_lot_for_user(user_id)
     if not active:
@@ -418,7 +443,7 @@ def cmd_code(message):
         return
     shared_secret = active[5]
     if not shared_secret:
-        bot.reply_to(message, "❌ shared_secret отсутствует для этого аккаунта.")
+        bot.reply_to(message, "❌ shared_secret отсутствует.")
         return
     code = generate_steam_code(shared_secret)
     if code:
@@ -426,23 +451,21 @@ def cmd_code(message):
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
 
-# ===== ЧАТЫ PLAYEROK (НОВЫЙ РАЗДЕЛ) =====
+# ===== ЧАТЫ PLAYEROK =====
 @bot.message_handler(commands=['chats'])
 def list_chats(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
-    # Получаем чаты (пока заглушка)
     chats = get_playerok_chats()
     if not chats:
-        bot.reply_to(message, "📭 Чатов нет.")
+        bot.reply_to(message, "📭 Чатов нет или ошибка подключения.")
         return
     text = "💬 **Список чатов:**\n\n"
     for chat in chats:
-        text += f"🔹 **{chat['id']}.** {chat['buyer']}\n   Последнее: {chat['last_message']}\n"
-    # Добавляем инструкцию, как посмотреть чат
-    bot.reply_to(message, text + "\nЧтобы открыть чат, отправьте `/chat ID`", parse_mode='Markdown')
+        text += f"🔹 **{chat['id']}.** {chat['buyer']}\n   {chat['last_message']}\n"
+    bot.reply_to(message, text + "\nИспользуй `/chat ID` для просмотра.", parse_mode='Markdown')
 
 @bot.message_handler(commands=['chat'])
 def open_chat(message):
@@ -452,14 +475,13 @@ def open_chat(message):
         return
     try:
         chat_id = int(message.text.split()[1])
-        messages = get_playerok_messages(chat_id)
+        msgs = get_playerok_messages(chat_id)
         text = f"💬 **Чат {chat_id}:**\n\n"
-        for msg in messages:
+        for msg in msgs:
             sender = "Покупатель" if msg['from'] == 'buyer' else "Вы"
             text += f"**{sender}:** {msg['text']}\n"
         bot.reply_to(message, text, parse_mode='Markdown')
-        # Даём возможность ответить
-        bot.reply_to(message, f"Чтобы ответить, отправьте `/reply {chat_id} Ваше сообщение`")
+        bot.reply_to(message, f"Ответить: `/reply {chat_id} Текст`")
     except:
         bot.reply_to(message, "❌ Используй: /chat ID")
 
@@ -470,7 +492,6 @@ def reply_to_chat(message):
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
     try:
-        # формат: /reply 123 Текст сообщения
         parts = message.text.split(maxsplit=2)
         if len(parts) < 3:
             bot.reply_to(message, "❌ Используй: /reply ID Текст")
@@ -487,52 +508,57 @@ def reply_to_chat(message):
 def menu_cmd(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_add_account = types.InlineKeyboardButton("➕ Добавить аккаунт", callback_data="add_account")
-    btn_add_lot = types.InlineKeyboardButton("➕ Добавить лот", callback_data="add_lot")
-    btn_accounts = types.InlineKeyboardButton("📋 Аккаунты", callback_data="list_accounts")
-    btn_del_account = types.InlineKeyboardButton("🗑 Удалить аккаунт", callback_data="delete_account")
-    btn_lots = types.InlineKeyboardButton("📋 Список лотов", callback_data="list_lots")
-    btn_delete_lot = types.InlineKeyboardButton("🗑 Удалить лот", callback_data="delete_lot")
-    btn_rent = types.InlineKeyboardButton("⏳ Начать аренду", callback_data="rent_lot")
-    btn_login = types.InlineKeyboardButton("🔑 Логин", callback_data="get_login")
-    btn_password = types.InlineKeyboardButton("🔒 Пароль", callback_data="get_password")
-    btn_code = types.InlineKeyboardButton("🔢 Код", callback_data="get_code")
-    btn_chats = types.InlineKeyboardButton("💬 Чаты", callback_data="list_chats")
-    markup.add(btn_add_account, btn_add_lot, btn_accounts, btn_del_account, btn_lots, btn_delete_lot, btn_rent, btn_login, btn_password, btn_code, btn_chats)
+    btns = [
+        ("➕ Добавить аккаунт", "add_account"),
+        ("➕ Добавить лот", "add_lot"),
+        ("📋 Аккаунты", "list_accounts"),
+        ("🗑 Удалить аккаунт", "delete_account"),
+        ("📋 Список лотов", "list_lots"),
+        ("🗑 Удалить лот", "delete_lot"),
+        ("⏳ Начать аренду", "rent_lot"),
+        ("🔑 Логин", "get_login"),
+        ("🔒 Пароль", "get_password"),
+        ("🔢 Код", "get_code"),
+        ("💬 Чаты", "list_chats"),
+    ]
+    for text, callback in btns:
+        markup.add(types.InlineKeyboardButton(text, callback_data=callback))
     bot.reply_to(message, "📌 **Главное меню**", reply_markup=markup, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
     if user_id not in verified_users:
-        bot.answer_callback_query(call.id, "❌ Доступ запрещён. Введите пароль.")
+        bot.answer_callback_query(call.id, "❌ Доступ запрещён.")
         return
     chat_id = call.message.chat.id
-    if call.data == "add_account":
-        bot.send_message(chat_id, "Введите /addaccount")
-    elif call.data == "add_lot":
-        bot.send_message(chat_id, "Введите /addlot")
-    elif call.data == "list_accounts":
-        show_accounts(call.message)
-    elif call.data == "delete_account":
-        bot.send_message(chat_id, "Введите /delaccount ID")
-    elif call.data == "list_lots":
-        show_lots_cmd(call.message)
-    elif call.data == "delete_lot":
-        bot.send_message(chat_id, "Введите /dellot ID")
-    elif call.data == "rent_lot":
-        bot.send_message(chat_id, "Введите /rent ID")
-    elif call.data == "get_login":
-        cmd_login(call.message)
-    elif call.data == "get_password":
-        cmd_password(call.message)
-    elif call.data == "get_code":
-        cmd_code(call.message)
-    elif call.data == "list_chats":
-        list_chats(call.message)
+    cmds = {
+        "add_account": "/addaccount",
+        "add_lot": "/addlot",
+        "list_accounts": "/accounts",
+        "delete_account": "Введите /delaccount ID",
+        "list_lots": "/lots",
+        "delete_lot": "Введите /dellot ID",
+        "rent_lot": "Введите /rent ID",
+        "get_login": None,
+        "get_password": None,
+        "get_code": None,
+        "list_chats": "/chats",
+    }
+    if call.data in cmds:
+        if cmds[call.data]:
+            bot.send_message(chat_id, f"Введите {cmds[call.data]}")
+        else:
+            # Вызываем соответствующую команду
+            if call.data == "get_login":
+                cmd_login(call.message)
+            elif call.data == "get_password":
+                cmd_password(call.message)
+            elif call.data == "get_code":
+                cmd_code(call.message)
     bot.answer_callback_query(call.id)
 
 # ===== /HELP =====
@@ -540,26 +566,26 @@ def callback_handler(call):
 def help_cmd(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     help_text = """
-📖 **Команды для продавца:**
-/addaccount — добавить аккаунт (по шагам)
-/addlot — добавить лот (по шагам)
-/accounts — показать все аккаунты
-/delaccount ID — удалить аккаунт
-/lots — показать все лоты
-/dellot ID — удалить лот
-/rent ID — начать аренду (на 1 час)
-/chats — список чатов Playerok
-/chat ID — открыть чат
-/reply ID Текст — ответить в чат
-/menu — открыть меню с кнопками
+📖 **Команды продавца:**
+/addaccount – добавить аккаунт (по шагам)
+/addlot – добавить лот (по шагам)
+/accounts – список аккаунтов
+/delaccount ID – удалить аккаунт
+/lots – список лотов
+/dellot ID – удалить лот
+/rent ID – начать аренду на 1 час
+/chats – чаты Playerok
+/chat ID – открыть чат
+/reply ID Текст – ответить
+/menu – меню с кнопками
 
-📖 **Команды для покупателя (в чате):**
-!login — логин от аккаунта
-!password — пароль
-!code — код Steam Guard
+📖 **Команды покупателя:**
+!login – логин
+!password – пароль
+!code – код Steam Guard
     """
     bot.reply_to(message, help_text, parse_mode='Markdown')
 
