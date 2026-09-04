@@ -14,7 +14,7 @@ try:
     sg = SteamGuard.from_mafile(ma_file_data)
     print("✅ SDA загружен успешно!")
 except Exception as e:
-    print(f"❌ Ошибка: {e}")
+    print(f"❌ Ошибка загрузки SDA: {e}")
     sg = None
 
 bot = telebot.TeleBot(TOKEN)
@@ -23,10 +23,10 @@ bot = telebot.TeleBot(TOKEN)
 @bot.message_handler(commands=['code'])
 def send_code(message):
     if sg:
-        code = sg.generate_code()  # Теперь выдаёт буквы + цифры
+        code = sg.generate_code()
         bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
     else:
-        bot.reply_to(message, "❌ Ошибка")
+        bot.reply_to(message, "❌ Ошибка: SDA не загружен")
 
 # === Команда !код ===
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith('!код'))
@@ -35,7 +35,7 @@ def auto_code(message):
         code = sg.generate_code()
         bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
     else:
-        bot.reply_to(message, "❌ Ошибка")
+        bot.reply_to(message, "❌ Ошибка: SDA не загружен")
 
 # === Flask для Render ===
 app = flask.Flask(__name__)
