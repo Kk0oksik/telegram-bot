@@ -3,7 +3,7 @@ import telebot
 import json
 import flask
 import threading
-from steamguard import SteamGuard  # ← ИСПРАВЛЕНО
+from steamguard import maFile  # ← ИСПРАВЛЕНО
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
@@ -11,7 +11,7 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 try:
     with open('maFile.maFile', 'r') as f:
         ma_file_data = json.load(f)
-    sg = SteamGuard.from_mafile(ma_file_data)
+    sg = maFile.from_json(ma_file_data)  # ← ИСПРАВЛЕНО
     print("✅ SDA загружен успешно!")
 except Exception as e:
     print(f"❌ Ошибка загрузки SDA: {e}")
@@ -23,7 +23,7 @@ bot = telebot.TeleBot(TOKEN)
 @bot.message_handler(commands=['code'])
 def send_code(message):
     if sg:
-        code = sg.generate_code()
+        code = sg.get_code()  # ← ИСПРАВЛЕНО
         bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
     else:
         bot.reply_to(message, "❌ Ошибка: SDA не загружен")
@@ -32,7 +32,7 @@ def send_code(message):
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith('!код'))
 def auto_code(message):
     if sg:
-        code = sg.generate_code()
+        code = sg.get_code()  # ← ИСПРАВЛЕНО
         bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
     else:
         bot.reply_to(message, "❌ Ошибка: SDA не загружен")
