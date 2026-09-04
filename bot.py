@@ -141,9 +141,7 @@ def start_rent(lot_id, user_id, rent_end):
     c = conn.cursor()
     c.execute("SELECT account_id FROM lots WHERE id=?", (lot_id,))
     account_id = c.fetchone()[0]
-    # Удаляем все другие лоты с этим же account_id
     c.execute("DELETE FROM lots WHERE account_id=? AND id != ?", (account_id, lot_id))
-    # Помечаем текущий лот как арендованный
     c.execute("UPDATE lots SET is_rented=1, rented_by=?, rent_end=? WHERE id=?", (user_id, rent_end, lot_id))
     conn.commit()
     conn.close()
@@ -165,6 +163,9 @@ def delete_lot(lot_id):
 # === СОЗДАЁМ БОТА ===
 bot = telebot.TeleBot(TOKEN)
 
+# === ХРАНИЛИЩЕ ДЛЯ ДИАЛОГОВ ===
+user_data = {}
+
 # === ТАЙМЕРЫ ===
 rent_timers = {}
 
@@ -182,15 +183,15 @@ def schedule_end_rent(lot_id, chat_id, rent_end):
         timer.start()
         rent_timers[lot_id] = timer
 
-# === ОБРАБОТЧИКИ КОМАНД ===
-
+# === ЗАЩИТА ПАРОЛЕМ ===
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.from_user.id
     if is_user_verified(user_id):
-        bot.reply_to(message, "✅ Доступ уже открыт.")
+        bot.reply_to(message, "✅ Доступ уже открыт. Используйте /menu.")
     else:
-        bot.reply_to(message, "🔐 Введите пароль командой:\n`!пароль _Axolotl_`", parse_mode='Markdown')
+        # НЕ ПОКАЗЫВАЕМ ПАРОЛЬ
+        bot.reply_to(message, "🔐 Введите пароль командой:\n`!пароль <пароль>`", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.startswith('!пароль'))
 def check_password(message):
@@ -198,58 +199,77 @@ def check_password(message):
     entered = message.text.replace('!пароль', '').strip()
     if entered == PASSWORD:
         verify_user(user_id)
-        bot.reply_to(message, f"✅ Доступ разрешён! (ID: {user_id})")
-        if is_user_verified(user_id):
-            bot.send_message(message.chat.id, "✅ Подтверждено: вы в базе.")
-        else:
-            bot.send_message(message.chat.id, "⚠️ Не удалось сохранить в базу. Попробуйте перезапустить бота.")
+        bot.reply_to(message, "✅ Доступ разрешён! Используйте /menu.")
     else:
         bot.reply_to(message, "❌ Неверный пароль.")
 
-# === КОМАНДЫ ДЛЯ ПРОДАВЦА ===
-
+# === ПОШАГОВОЕ ДОБАВЛЕНИЕ АККАУНТА ===
 @bot.message_handler(commands=['addaccount'])
-def add_account_cmd(message):
+def add_account_start(message):
     user_id = message.from_user.id
     if not is_user_verified(user_id):
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
-    try:
-        parts = message.text.split('|')
-        if len(parts) < 4:
-            bot.reply_to(message, "❌ Используй: /addaccount Имя | Логин | Пароль | shared_secret")
-            return
-        name = parts[0].replace('/addaccount', '').strip()
-        login = parts[1].strip()
-        password = parts[2].strip()
-        shared_secret = parts[3].strip()
-        add_account(name, login, password, shared_secret)
-        bot.reply_to(message, f"✅ Аккаунт добавлен: {name}")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+    user_data[user_id] = {'action': 'add_account', 'step': 'name'}
+    bot.reply_to(message, "Введите **имя** аккаунта (уникальное):", parse_mode='Markdown')
 
+@bot.message_handler(func=lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id]['action'] == 'add_account')
+def add_account_steps(message):
+    user_id = message.from_user.id
+    step = user_data[user_id].get('step')
+    if step == 'name':
+        user_data[user_id]['name'] = message.text.strip()
+        user_data[user_id]['step'] = 'login'
+        bot.reply_to(message, "Введите **логин** аккаунта:")
+    elif step == 'login':
+        user_data[user_id]['login'] = message.text.strip()
+        user_data[user_id]['step'] = 'password'
+        bot.reply_to(message, "Введите **пароль** аккаунта:")
+    elif step == 'password':
+        user_data[user_id]['password'] = message.text.strip()
+        user_data[user_id]['step'] = 'shared_secret'
+        bot.reply_to(message, "Введите **shared_secret** (из файла .maFile):")
+    elif step == 'shared_secret':
+        shared_secret = message.text.strip()
+        try:
+            add_account(user_data[user_id]['name'], user_data[user_id]['login'], user_data[user_id]['password'], shared_secret)
+            bot.reply_to(message, f"✅ Аккаунт **{user_data[user_id]['name']}** добавлен!")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Ошибка: {e}")
+        del user_data[user_id]
+
+# === ПОШАГОВОЕ ДОБАВЛЕНИЕ ЛОТА ===
 @bot.message_handler(commands=['addlot'])
-def add_lot_cmd(message):
+def add_lot_start(message):
     user_id = message.from_user.id
     if not is_user_verified(user_id):
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
-    try:
-        parts = message.text.split('|')
-        if len(parts) < 3:
-            bot.reply_to(message, "❌ Используй: /addlot Название | Ссылка | Имя_аккаунта")
-            return
-        name = parts[0].replace('/addlot', '').strip()
-        link = parts[1].strip()
-        account_name = parts[2].strip()
-        lot_id = add_lot(name, link, account_name)
+    user_data[user_id] = {'action': 'add_lot', 'step': 'name'}
+    bot.reply_to(message, "Введите **название** лота:", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id]['action'] == 'add_lot')
+def add_lot_steps(message):
+    user_id = message.from_user.id
+    step = user_data[user_id].get('step')
+    if step == 'name':
+        user_data[user_id]['name'] = message.text.strip()
+        user_data[user_id]['step'] = 'link'
+        bot.reply_to(message, "Введите **ссылку** на лот (Playerok):")
+    elif step == 'link':
+        user_data[user_id]['link'] = message.text.strip()
+        user_data[user_id]['step'] = 'account'
+        bot.reply_to(message, "Введите **имя аккаунта**, к которому привязан лот:")
+    elif step == 'account':
+        account_name = message.text.strip()
+        lot_id = add_lot(user_data[user_id]['name'], user_data[user_id]['link'], account_name)
         if lot_id:
-            bot.reply_to(message, f"✅ Лот добавлен! ID: {lot_id}\nНазвание: {name}")
+            bot.reply_to(message, f"✅ Лот **{user_data[user_id]['name']}** добавлен! ID: {lot_id}")
         else:
             bot.reply_to(message, f"❌ Аккаунт '{account_name}' не найден. Сначала добавьте аккаунт через /addaccount.")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+        del user_data[user_id]
 
+# === ОСТАЛЬНЫЕ КОМАНДЫ (БЕЗ ИЗМЕНЕНИЙ) ===
 @bot.message_handler(commands=['lots'])
 def show_lots_cmd(message):
     user_id = message.from_user.id
@@ -307,7 +327,6 @@ def rent_lot_cmd(message):
         bot.reply_to(message, f"❌ Ошибка: {e}")
 
 # === КОМАНДЫ ДЛЯ ПОКУПАТЕЛЯ ===
-
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!login')
 def cmd_login(message):
     user_id = message.from_user.id
@@ -343,8 +362,6 @@ def cmd_code(message):
         bot.reply_to(message, "❌ У вас нет активной аренды.")
         return
     shared_secret = active[5]
-    # Отладка (убрать после проверки)
-    bot.reply_to(message, f"DEBUG: shared_secret = {shared_secret[:10] if shared_secret else 'None'}...")
     if not shared_secret:
         bot.reply_to(message, "❌ shared_secret отсутствует для этого аккаунта.")
         return
@@ -354,7 +371,7 @@ def cmd_code(message):
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
 
-# === МЕНЮ С КНОПКАМИ ===
+# === МЕНЮ ===
 @bot.message_handler(commands=['menu'])
 def menu_cmd(message):
     user_id = message.from_user.id
@@ -376,16 +393,15 @@ def menu_cmd(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
-    # Диагностика
-    bot.send_message(call.message.chat.id, f"DEBUG: user_id={user_id}, verified={is_user_verified(user_id)}")
     if not is_user_verified(user_id):
-        bot.answer_callback_query(call.id, "❌ Доступ запрещён. Введите пароль заново.")
+        bot.answer_callback_query(call.id, "❌ Доступ запрещён. Введите пароль.")
         return
     chat_id = call.message.chat.id
     if call.data == "add_account":
-        bot.send_message(chat_id, "Введите /addaccount Имя | Логин | Пароль | shared_secret")
+        # Запускаем диалог добавления аккаунта
+        bot.send_message(chat_id, "Введите /addaccount")
     elif call.data == "add_lot":
-        bot.send_message(chat_id, "Введите /addlot Название | Ссылка | Имя_аккаунта")
+        bot.send_message(chat_id, "Введите /addlot")
     elif call.data == "list_lots":
         show_lots_cmd(call.message)
     elif call.data == "delete_lot":
@@ -409,8 +425,8 @@ def help_cmd(message):
         return
     help_text = """
 📖 **Команды для продавца:**
-/addaccount Имя | Логин | Пароль | shared_secret — добавить аккаунт
-/addlot Название | Ссылка | Имя_аккаунта — добавить лот
+/addaccount — добавить аккаунт (по шагам)
+/addlot — добавить лот (по шагам)
 /lots — показать все лоты
 /dellot ID — удалить лот
 /rent ID — начать аренду (на 1 час)
