@@ -3,7 +3,7 @@ import telebot
 import json
 import flask
 import threading
-from steam_guard import SteamGuard
+from steamguard import SteamGuard  # ← ИСПРАВЛЕНО
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
