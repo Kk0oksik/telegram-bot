@@ -15,6 +15,9 @@ from telebot import types
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 PASSWORD = "_Axolotl_"
 
+# === ХРАНЕНИЕ ВЕРИФИЦИРОВАННЫХ ПОЛЬЗОВАТЕЛЕЙ В ПАМЯТИ ===
+verified_users = set()
+
 # === АЛФАВИТ STEAM GUARD ===
 STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
 
@@ -64,21 +67,6 @@ def init_db():
 init_db()
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД ===
-def is_user_verified(user_id):
-    conn = sqlite3.connect('lots.db')
-    c = conn.cursor()
-    c.execute("SELECT is_verified FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row and row[0] == 1
-
-def verify_user(user_id):
-    conn = sqlite3.connect('lots.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users (user_id, is_verified) VALUES (?, 1)", (user_id,))
-    conn.commit()
-    conn.close()
-
 def add_account(name, login, password, shared_secret):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
@@ -87,6 +75,14 @@ def add_account(name, login, password, shared_secret):
     conn.commit()
     conn.close()
 
+def get_all_accounts():
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("SELECT id, name, login FROM accounts")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def get_account_by_name(name):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
@@ -94,6 +90,15 @@ def get_account_by_name(name):
     row = c.fetchone()
     conn.close()
     return row
+
+def delete_account(account_id):
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    # Удаляем все лоты, привязанные к этому аккаунту
+    c.execute("DELETE FROM lots WHERE account_id=?", (account_id,))
+    c.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+    conn.commit()
+    conn.close()
 
 def add_lot(name, link, account_name):
     account = get_account_by_name(account_name)
@@ -160,7 +165,7 @@ def delete_lot(lot_id):
     conn.commit()
     conn.close()
 
-# === СОЗДАЁМ БОТА ===
+# === БОТ ===
 bot = telebot.TeleBot(TOKEN)
 
 # === ХРАНИЛИЩЕ ДЛЯ ДИАЛОГОВ ===
@@ -187,10 +192,9 @@ def schedule_end_rent(lot_id, chat_id, rent_end):
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.from_user.id
-    if is_user_verified(user_id):
+    if user_id in verified_users:
         bot.reply_to(message, "✅ Доступ уже открыт. Используйте /menu.")
     else:
-        # НЕ ПОКАЗЫВАЕМ ПАРОЛЬ
         bot.reply_to(message, "🔐 Введите пароль командой:\n`!пароль <пароль>`", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.startswith('!пароль'))
@@ -198,7 +202,7 @@ def check_password(message):
     user_id = message.from_user.id
     entered = message.text.replace('!пароль', '').strip()
     if entered == PASSWORD:
-        verify_user(user_id)
+        verified_users.add(user_id)
         bot.reply_to(message, "✅ Доступ разрешён! Используйте /menu.")
     else:
         bot.reply_to(message, "❌ Неверный пароль.")
@@ -207,7 +211,7 @@ def check_password(message):
 @bot.message_handler(commands=['addaccount'])
 def add_account_start(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     user_data[user_id] = {'action': 'add_account', 'step': 'name'}
@@ -242,7 +246,7 @@ def add_account_steps(message):
 @bot.message_handler(commands=['addlot'])
 def add_lot_start(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     user_data[user_id] = {'action': 'add_lot', 'step': 'name'}
@@ -269,12 +273,42 @@ def add_lot_steps(message):
             bot.reply_to(message, f"❌ Аккаунт '{account_name}' не найден. Сначала добавьте аккаунт через /addaccount.")
         del user_data[user_id]
 
-# === ОСТАЛЬНЫЕ КОМАНДЫ (БЕЗ ИЗМЕНЕНИЙ) ===
+# === КОМАНДА ДЛЯ ПРОСМОТРА АККАУНТОВ ===
+@bot.message_handler(commands=['accounts'])
+def show_accounts(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    accounts = get_all_accounts()
+    if not accounts:
+        bot.reply_to(message, "📭 Аккаунтов нет.")
+        return
+    text = "📋 **Аккаунты:**\n\n"
+    for acc in accounts:
+        text += f"🔹 **{acc[0]}.** {acc[1]} (логин: {acc[2]})\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+# === КОМАНДА ДЛЯ УДАЛЕНИЯ АККАУНТА ===
+@bot.message_handler(commands=['delaccount'])
+def delete_account_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        account_id = int(message.text.split()[1])
+        delete_account(account_id)
+        bot.reply_to(message, f"✅ Аккаунт {account_id} и все его лоты удалены.")
+    except:
+        bot.reply_to(message, "❌ Используй: /delaccount ID")
+
+# === ОСТАЛЬНЫЕ КОМАНДЫ (ЛОТЫ, АРЕНДА) ===
 @bot.message_handler(commands=['lots'])
 def show_lots_cmd(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     lots = get_all_lots()
     if not lots:
@@ -289,8 +323,8 @@ def show_lots_cmd(message):
 @bot.message_handler(commands=['dellot'])
 def delete_lot_cmd(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     try:
         lot_id = int(message.text.split()[1])
@@ -302,8 +336,8 @@ def delete_lot_cmd(message):
 @bot.message_handler(commands=['rent'])
 def rent_lot_cmd(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
-        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
         return
     try:
         parts = message.text.split()
@@ -330,7 +364,7 @@ def rent_lot_cmd(message):
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!login')
 def cmd_login(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     active = get_active_lot_for_user(user_id)
@@ -342,7 +376,7 @@ def cmd_login(message):
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!password')
 def cmd_password(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     active = get_active_lot_for_user(user_id)
@@ -354,7 +388,7 @@ def cmd_password(message):
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!code')
 def cmd_code(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     active = get_active_lot_for_user(user_id)
@@ -375,33 +409,38 @@ def cmd_code(message):
 @bot.message_handler(commands=['menu'])
 def menu_cmd(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_add_account = types.InlineKeyboardButton("➕ Добавить аккаунт", callback_data="add_account")
     btn_add_lot = types.InlineKeyboardButton("➕ Добавить лот", callback_data="add_lot")
+    btn_accounts = types.InlineKeyboardButton("📋 Аккаунты", callback_data="list_accounts")
+    btn_del_account = types.InlineKeyboardButton("🗑 Удалить аккаунт", callback_data="delete_account")
     btn_lots = types.InlineKeyboardButton("📋 Список лотов", callback_data="list_lots")
     btn_delete_lot = types.InlineKeyboardButton("🗑 Удалить лот", callback_data="delete_lot")
     btn_rent = types.InlineKeyboardButton("⏳ Начать аренду", callback_data="rent_lot")
     btn_login = types.InlineKeyboardButton("🔑 Логин", callback_data="get_login")
     btn_password = types.InlineKeyboardButton("🔒 Пароль", callback_data="get_password")
     btn_code = types.InlineKeyboardButton("🔢 Код", callback_data="get_code")
-    markup.add(btn_add_account, btn_add_lot, btn_lots, btn_delete_lot, btn_rent, btn_login, btn_password, btn_code)
+    markup.add(btn_add_account, btn_add_lot, btn_accounts, btn_del_account, btn_lots, btn_delete_lot, btn_rent, btn_login, btn_password, btn_code)
     bot.reply_to(message, "📌 **Главное меню**", reply_markup=markup, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.answer_callback_query(call.id, "❌ Доступ запрещён. Введите пароль.")
         return
     chat_id = call.message.chat.id
     if call.data == "add_account":
-        # Запускаем диалог добавления аккаунта
         bot.send_message(chat_id, "Введите /addaccount")
     elif call.data == "add_lot":
         bot.send_message(chat_id, "Введите /addlot")
+    elif call.data == "list_accounts":
+        show_accounts(call.message)
+    elif call.data == "delete_account":
+        bot.send_message(chat_id, "Введите /delaccount ID")
     elif call.data == "list_lots":
         show_lots_cmd(call.message)
     elif call.data == "delete_lot":
@@ -420,13 +459,15 @@ def callback_handler(call):
 @bot.message_handler(commands=['help'])
 def help_cmd(message):
     user_id = message.from_user.id
-    if not is_user_verified(user_id):
+    if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     help_text = """
 📖 **Команды для продавца:**
 /addaccount — добавить аккаунт (по шагам)
 /addlot — добавить лот (по шагам)
+/accounts — показать все аккаунты
+/delaccount ID — удалить аккаунт
 /lots — показать все лоты
 /dellot ID — удалить лот
 /rent ID — начать аренду (на 1 час)
