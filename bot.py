@@ -8,7 +8,7 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
 # Загружаем SDA
 try:
-    with open('mafile.mafile', 'r') as f:
+    with open('maFile.maFile', 'r') as f:
         ma_file_data = json.load(f)
     sg = maFile.from_json(ma_file_data)
     print("SDA загружен успешно!")
