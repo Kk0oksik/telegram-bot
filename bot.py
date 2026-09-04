@@ -1,6 +1,6 @@
 import os
 import telebot
-from steamguard import SteamGuardAuthenticator
+from steamguard import maFile
 import json
 import flask
 
@@ -9,11 +9,11 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 # Загружаем SDA
 try:
     with open('mafile.mafile', 'r') as f:
-        ma_file = json.load(f)
-    sg = SteamGuardAuthenticator.from_mafile(ma_file)
+        ma_file_data = json.load(f)
+    sg = maFile.from_json(ma_file_data)
     print("SDA загружен успешно!")
 except Exception as e:
-    print(f"Ошибка загрузки SDA: {e}")
+    print(f"Ошибка: {e}")
     sg = None
 
 bot = telebot.TeleBot(TOKEN)
@@ -21,7 +21,7 @@ bot = telebot.TeleBot(TOKEN)
 @bot.message_handler(commands=['code'])
 def send_code(message):
     if sg:
-        code = sg.generate_code()
+        code = sg.get_code()
         bot.reply_to(message, f"🔑 Код: `{code}`", parse_mode='Markdown')
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
