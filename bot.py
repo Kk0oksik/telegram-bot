@@ -11,9 +11,10 @@ import time
 import re
 import sqlite3
 from datetime import datetime, timedelta
+from telebot import types
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
-PASSWORD = "_Axolotl_"  # пароль для доступа
+PASSWORD = "_Axolotl_"  # пароль для доступа (не показывается)
 
 # === АЛФАВИТ STEAM GUARD ===
 STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
@@ -139,7 +140,6 @@ def get_active_lot_for_user(user_id):
 def start_rent(lot_id, user_id, rent_end):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
-    # Получаем account_id этого лота
     c.execute("SELECT account_id FROM lots WHERE id=?", (lot_id,))
     account_id = c.fetchone()[0]
     # Удаляем все другие лоты с этим же account_id
@@ -190,7 +190,8 @@ def start_cmd(message):
     if is_user_verified(user_id):
         bot.reply_to(message, "✅ Доступ уже открыт. Используйте команды.")
     else:
-        bot.reply_to(message, f"🔐 Введите пароль: `!пароль {PASSWORD}`", parse_mode='Markdown')
+        # Пароль не показываем
+        bot.reply_to(message, "🔐 Введите пароль командой:\n`!пароль <пароль>`", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.startswith('!пароль'))
 def check_password(message):
@@ -202,7 +203,7 @@ def check_password(message):
     else:
         bot.reply_to(message, "❌ Неверный пароль.")
 
-# === КОМАНДЫ ДЛЯ ПРОДАВЦА (УПРАВЛЕНИЕ) ===
+# === КОМАНДЫ ДЛЯ ПРОДАВЦА ===
 
 @bot.message_handler(commands=['addaccount'])
 def add_account_cmd(message):
@@ -211,7 +212,6 @@ def add_account_cmd(message):
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     try:
-        # /addaccount Имя | Логин | Пароль | shared_secret
         parts = message.text.split('|')
         if len(parts) < 4:
             bot.reply_to(message, "❌ Используй: /addaccount Имя | Логин | Пароль | shared_secret")
@@ -232,7 +232,6 @@ def add_lot_cmd(message):
         bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
         return
     try:
-        # /addlot Название | Ссылка | Имя_аккаунта
         parts = message.text.split('|')
         if len(parts) < 3:
             bot.reply_to(message, "❌ Используй: /addlot Название | Ссылка | Имя_аккаунта")
@@ -296,19 +295,15 @@ def rent_lot_cmd(message):
         if lot[4] == 1:
             bot.reply_to(message, f"❌ Лот {lot_id} уже в аренде")
             return
-        # Начинаем аренду на 1 час
         rent_end = datetime.now() + timedelta(hours=1)
         start_rent(lot_id, user_id, rent_end.isoformat())
-        # Выдаём данные покупателю
         bot.reply_to(message, f"✅ Аренда лота {lot_id} начата до {rent_end.strftime('%H:%M')}")
-        # Уведомляем, что связанные лоты удалены
         bot.send_message(message.chat.id, "🔄 Связанные лоты удалены.")
-        # Запускаем таймер
         schedule_end_rent(lot_id, message.chat.id, rent_end)
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {e}")
 
-# === КОМАНДЫ ДЛЯ ПОКУПАТЕЛЯ (В ЧАТЕ) ===
+# === КОМАНДЫ ДЛЯ ПОКУПАТЕЛЯ ===
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!login')
 def cmd_login(message):
@@ -345,6 +340,8 @@ def cmd_code(message):
         bot.reply_to(message, "❌ У вас нет активной аренды.")
         return
     shared_secret = active[5]
+    # Отладка (убрать после проверки)
+    bot.reply_to(message, f"DEBUG: shared_secret = {shared_secret[:10] if shared_secret else 'None'}...")
     if not shared_secret:
         bot.reply_to(message, "❌ shared_secret отсутствует для этого аккаунта.")
         return
@@ -353,6 +350,50 @@ def cmd_code(message):
         bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
+
+# === МЕНЮ С КНОПКАМИ ===
+@bot.message_handler(commands=['menu'])
+def menu_cmd(message):
+    user_id = message.from_user.id
+    if not is_user_verified(user_id):
+        bot.reply_to(message, "❌ Доступ запрещён. Введите пароль.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_add_account = types.InlineKeyboardButton("➕ Добавить аккаунт", callback_data="add_account")
+    btn_add_lot = types.InlineKeyboardButton("➕ Добавить лот", callback_data="add_lot")
+    btn_lots = types.InlineKeyboardButton("📋 Список лотов", callback_data="list_lots")
+    btn_delete_lot = types.InlineKeyboardButton("🗑 Удалить лот", callback_data="delete_lot")
+    btn_rent = types.InlineKeyboardButton("⏳ Начать аренду", callback_data="rent_lot")
+    btn_login = types.InlineKeyboardButton("🔑 Логин", callback_data="get_login")
+    btn_password = types.InlineKeyboardButton("🔒 Пароль", callback_data="get_password")
+    btn_code = types.InlineKeyboardButton("🔢 Код", callback_data="get_code")
+    markup.add(btn_add_account, btn_add_lot, btn_lots, btn_delete_lot, btn_rent, btn_login, btn_password, btn_code)
+    bot.reply_to(message, "📌 **Главное меню**", reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.from_user.id
+    if not is_user_verified(user_id):
+        bot.answer_callback_query(call.id, "❌ Доступ запрещён")
+        return
+    chat_id = call.message.chat.id
+    if call.data == "add_account":
+        bot.send_message(chat_id, "Введите /addaccount Имя | Логин | Пароль | shared_secret")
+    elif call.data == "add_lot":
+        bot.send_message(chat_id, "Введите /addlot Название | Ссылка | Имя_аккаунта")
+    elif call.data == "list_lots":
+        show_lots_cmd(call.message)  # переиспользуем существующую функцию
+    elif call.data == "delete_lot":
+        bot.send_message(chat_id, "Введите /dellot ID")
+    elif call.data == "rent_lot":
+        bot.send_message(chat_id, "Введите /rent ID")
+    elif call.data == "get_login":
+        cmd_login(call.message)
+    elif call.data == "get_password":
+        cmd_password(call.message)
+    elif call.data == "get_code":
+        cmd_code(call.message)
+    bot.answer_callback_query(call.id)
 
 # === /HELP ===
 @bot.message_handler(commands=['help'])
@@ -368,6 +409,7 @@ def help_cmd(message):
 /lots — показать все лоты
 /dellot ID — удалить лот
 /rent ID — начать аренду (на 1 час)
+/menu — открыть меню с кнопками
 
 📖 **Команды для покупателя (в чате):**
 !login — логин от аккаунта
