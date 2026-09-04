@@ -1,21 +1,32 @@
 import os
 import telebot
-from steamguard import SteamGuard
+from steamguard import SteamGuardAuthenticator
+import json
+import flask
 
-TOKEN = os.environ.get('TELEGRAM_TOKEN')  # токен берётся из настроек Render
-SDA_MAFILE = 'maFile.maFile'  # положи файл .maFile в ту же папку
-SDA_PASSWORD = 'твой_пароль'  # впиши свой пароль от SDA
+TOKEN = os.environ.get('TELEGRAM_TOKEN')
+
+# Загружаем SDA
+try:
+    with open('mafile.mafile', 'r') as f:
+        ma_file = json.load(f)
+    sg = SteamGuardAuthenticator.from_mafile(ma_file)
+    print("SDA загружен успешно!")
+except Exception as e:
+    print(f"Ошибка загрузки SDA: {e}")
+    sg = None
 
 bot = telebot.TeleBot(TOKEN)
-sg = SteamGuard.from_mafile(SDA_MAFILE, SDA_PASSWORD)
 
 @bot.message_handler(commands=['code'])
 def send_code(message):
-    code = sg.generate_code()
-    bot.reply_to(message, f"Код: {code}")
+    if sg:
+        code = sg.generate_code()
+        bot.reply_to(message, f"🔑 Код: `{code}`", parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Ошибка генерации кода")
 
-# Для Render нужно слушать порт
-import flask
+# Для Render
 app = flask.Flask(__name__)
 @app.route('/')
 def health():
