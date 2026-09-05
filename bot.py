@@ -17,11 +17,11 @@ from telebot import types
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 PASSWORD = "_Axolotl_"
 
-# Ваш Telegram ID (бот сразу вас узнаёт)
+# Ваш Telegram ID
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
 
-# ===== КУКИ PLAYEROK (обновите при необходимости) =====
+# ===== КУКИ PLAYEROK =====
 PLAYEROK_COOKIES = {
     "__ddg1_": "UBzmNVPp3kE4YFKjtLKY",
     "__ddg10_": "1788558251",
@@ -241,27 +241,40 @@ SESSION.headers.update({
     'Accept': 'application/json',
 })
 
+# ===== НОВАЯ ВЕРСИЯ get_all_chats() С ОТЛАДКОЙ =====
 def get_all_chats():
-    """Получает список всех чатов через REST API"""
+    """Получает список всех чатов через REST API с отладкой"""
     try:
-        resp = SESSION.get(f"{BASE_URL}/rest-api/chat/list")
-        if resp.status_code == 200:
-            data = resp.json()
-            # Ожидаем, что в ответе есть список чатов
-            if "chats" in data:
-                return data["chats"]  # список объектов с id, title и т.д.
-            else:
-                # иногда ответ может быть в другом формате
-                return data.get("items", []) or []
-        else:
-            print(f"Ошибка получения чатов: {resp.status_code}, {resp.text}")
-            return []
+        # Пробуем несколько эндпоинтов (вдруг какой-то сработает)
+        endpoints = [
+            "/rest-api/chat/list",
+            "/rest-api/chats",
+            "/rest-api/conversations",
+            "/rest-api/inbox",
+        ]
+        for endpoint in endpoints:
+            url = f"{BASE_URL}{endpoint}"
+            resp = SESSION.get(url)
+            print(f"🔍 GET {url} -> {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"📦 Ответ: {json.dumps(data, indent=2)[:500]}")
+                # Проверяем структуру ответа
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    # Ищем ключи, которые могут содержать список чатов
+                    for key in ["chats", "items", "data", "list", "conversations"]:
+                        if key in data and isinstance(data[key], list):
+                            return data[key]
+                return []  # если структура не распознана
+        return []
     except Exception as e:
         print(f"Исключение в get_all_chats: {e}")
         return []
 
 def get_chat_messages(chat_id, since_id=None):
-    """Получает сообщения чата, начиная с since_id (если указан)"""
+    """Получает сообщения чата через REST API"""
     try:
         url = f"{BASE_URL}/rest-api/chat/{chat_id}/messages"
         params = {}
@@ -270,17 +283,16 @@ def get_chat_messages(chat_id, since_id=None):
         resp = SESSION.get(url, params=params)
         if resp.status_code == 200:
             data = resp.json()
-            # Возвращаем список сообщений (каждое должно иметь id, text, user, createdAt)
             return data.get("messages", [])
         else:
-            print(f"Ошибка получения сообщений: {resp.status_code}, {resp.text}")
+            print(f"Ошибка получения сообщений: {resp.status_code}")
             return []
     except Exception as e:
         print(f"Исключение в get_chat_messages: {e}")
         return []
 
 def send_chat_message(chat_id, text):
-    """Отправляет сообщение в чат"""
+    """Отправляет сообщение в чат через REST API"""
     try:
         url = f"{BASE_URL}/rest-api/chat/{chat_id}/send"
         payload = {"text": text}
@@ -288,7 +300,7 @@ def send_chat_message(chat_id, text):
         if resp.status_code == 200:
             return resp.json()
         else:
-            print(f"Ошибка отправки: {resp.status_code}, {resp.text}")
+            print(f"Ошибка отправки: {resp.status_code}")
             return None
     except Exception as e:
         print(f"Исключение в send_chat_message: {e}")
@@ -527,7 +539,7 @@ def cmd_code(message):
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
 
-# ===== УПРАВЛЕНИЕ ОТСЛЕЖИВАЕМЫМИ ЧАТАМИ =====
+# ===== УПРАВЛЕНИЕ ЧАТАМИ =====
 @bot.message_handler(commands=['addchat'])
 def add_chat_cmd(message):
     user_id = message.from_user.id
@@ -537,9 +549,9 @@ def add_chat_cmd(message):
     try:
         chat_id = message.text.split()[1]
         add_monitored_chat(chat_id)
-        bot.reply_to(message, f"✅ Чат {chat_id} добавлен в мониторинг.")
+        bot.reply_to(message, f"✅ Чат {chat_id} добавлен.")
     except:
-        bot.reply_to(message, "❌ Используй: /addchat ID_чата")
+        bot.reply_to(message, "❌ Используй: /addchat ID")
 
 @bot.message_handler(commands=['removechat'])
 def remove_chat_cmd(message):
@@ -550,9 +562,9 @@ def remove_chat_cmd(message):
     try:
         chat_id = message.text.split()[1]
         remove_monitored_chat(chat_id)
-        bot.reply_to(message, f"✅ Чат {chat_id} удалён из мониторинга.")
+        bot.reply_to(message, f"✅ Чат {chat_id} удалён.")
     except:
-        bot.reply_to(message, "❌ Используй: /removechat ID_чата")
+        bot.reply_to(message, "❌ Используй: /removechat ID")
 
 @bot.message_handler(commands=['listchats'])
 def list_chats_cmd(message):
@@ -577,16 +589,15 @@ def sync_chats_cmd(message):
         return
     chats = get_all_chats()
     if not chats:
-        bot.reply_to(message, "❌ Не удалось получить список чатов. Проверьте куки Playerok (команда /checkcookies).")
+        bot.reply_to(message, "❌ Не удалось получить список чатов. Проверьте куки.")
         return
     added = 0
     for chat in chats:
-        # Получаем ID чата (может быть в разных полях)
         chat_id = chat.get('id') or chat.get('chatId')
         if chat_id:
             add_monitored_chat(chat_id)
             added += 1
-    bot.reply_to(message, f"✅ Добавлено {added} чатов в мониторинг.")
+    bot.reply_to(message, f"✅ Добавлено {added} чатов.")
 
 # ===== ПРОВЕРКА КУК =====
 @bot.message_handler(commands=['checkcookies'])
@@ -611,7 +622,6 @@ def test_playerok(message):
     if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
-    # Проверяем получение сообщений из первого отслеживаемого чата
     chats = get_monitored_chats()
     if not chats:
         bot.reply_to(message, "❌ Сначала добавьте чаты через /syncchats или /addchat")
@@ -619,8 +629,7 @@ def test_playerok(message):
     chat_id = chats[0][0]
     msgs = get_chat_messages(chat_id)
     if msgs:
-        count = len(msgs)
-        bot.reply_to(message, f"✅ Получено {count} сообщений из чата {chat_id}")
+        bot.reply_to(message, f"✅ Получено {len(msgs)} сообщений из чата {chat_id}")
     else:
         bot.reply_to(message, f"❌ Не удалось получить сообщения из чата {chat_id}")
 
@@ -629,7 +638,6 @@ def monitor_playerok_chats():
     last_sync = time.time()
     while True:
         try:
-            # Синхронизация чатов каждые 10 минут
             if time.time() - last_sync > 600:
                 all_chats = get_all_chats()
                 for chat in all_chats:
@@ -638,17 +646,13 @@ def monitor_playerok_chats():
                         add_monitored_chat(chat_id)
                 last_sync = time.time()
                 print("🔄 Чаты синхронизированы")
-
-            # Мониторинг новых сообщений
             chats = get_monitored_chats()
             for chat_id, last_id in chats:
                 msgs = get_chat_messages(chat_id, since_id=last_id)
                 if msgs:
-                    # Обновляем last_id на ID последнего сообщения
                     new_last_id = msgs[-1].get('id')
                     if new_last_id:
                         update_last_message_id(chat_id, new_last_id)
-                    # Обрабатываем новые сообщения
                     for msg in msgs:
                         text = msg.get('text', '')
                         if text.lower().startswith('!code'):
@@ -673,7 +677,6 @@ def monitor_playerok_chats():
             print(f"Ошибка мониторинга: {e}")
         time.sleep(10)
 
-# Запускаем мониторинг
 monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
 monitor_thread.start()
 
@@ -760,13 +763,13 @@ def help_cmd(message):
 /lots – список лотов
 /dellot ID – удалить лот
 /rent ID – начать аренду на 1 час
-/syncchats – синхронизировать все чаты Playerok
+/syncchats – синхронизировать чаты Playerok
 /addchat ID – добавить чат вручную
-/removechat ID – удалить чат из мониторинга
-/listchats – список отслеживаемых чатов
-/checkcookies – проверить работу кук Playerok
-/test – проверить работу с Playerok
-/menu – меню с кнопками
+/removechat ID – удалить чат
+/listchats – список чатов
+/checkcookies – проверить куки
+/test – тест Playerok
+/menu – меню
 
 📖 **Команды покупателя:**
 !login – логин
@@ -783,7 +786,6 @@ def health():
 
 if __name__ == '__main__':
     print("🚀 Бот запущен!")
-    # Небольшая задержка перед запуском, чтобы избежать конфликтов
     time.sleep(2)
     threading.Thread(target=bot.infinity_polling).start()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
