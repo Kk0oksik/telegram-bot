@@ -299,9 +299,8 @@ def send_chat_message(chat_id, text):
         return result["data"]["sendMessage"]
     return None
 
-# ===== НОВАЯ ФУНКЦИЯ: ПОЛУЧИТЬ ВСЕ ЧАТЫ =====
 def get_all_chats():
-    """Получает список всех личных чатов пользователя"""
+    """Получает список всех личных чатов пользователя с отладкой"""
     query = """
     query Chats {
       chats(first: 50) {
@@ -315,16 +314,28 @@ def get_all_chats():
     }
     """
     result = graphql_request(query)
+    # Логируем полный ответ для отладки
+    print("🔍 GraphQL ответ на get_all_chats:", json.dumps(result, indent=2)[:500])
     if result and "data" in result and "chats" in result["data"]:
         edges = result["data"]["chats"]["edges"]
         chats = []
         for edge in edges:
             node = edge["node"]
-            # Фильтруем только личные сообщения (не поддержка, не уведомления)
             if node.get("type") == "PM":
                 chats.append({"id": node["id"]})
         return chats
+    if result and "errors" in result:
+        print("❌ Ошибки GraphQL:", result["errors"])
     return []
+
+# ===== ПРОВЕРКА КУК =====
+playerok_session = requests.Session()
+playerok_session.cookies.update(PLAYEROK_COOKIES)
+playerok_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+})
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
@@ -601,7 +612,6 @@ def list_chats_cmd(message):
         text += f"🔹 {chat_id}\n"
     bot.reply_to(message, text, parse_mode='Markdown')
 
-# ===== НОВАЯ КОМАНДА: СИНХРОНИЗАЦИЯ ВСЕХ ЧАТОВ =====
 @bot.message_handler(commands=['syncchats'])
 def sync_chats_cmd(message):
     user_id = message.from_user.id
@@ -610,7 +620,7 @@ def sync_chats_cmd(message):
         return
     chats = get_all_chats()
     if not chats:
-        bot.reply_to(message, "❌ Не удалось получить список чатов. Проверьте куки Playerok.")
+        bot.reply_to(message, "❌ Не удалось получить список чатов. Проверьте куки Playerok (команда /checkcookies).")
         return
     added = 0
     for chat in chats:
@@ -618,6 +628,22 @@ def sync_chats_cmd(message):
         add_monitored_chat(chat_id)
         added += 1
     bot.reply_to(message, f"✅ Добавлено {added} чатов в мониторинг.")
+
+# ===== ПРОВЕРКА КУК =====
+@bot.message_handler(commands=['checkcookies'])
+def check_cookies_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        resp = playerok_session.get('https://playerok.com')
+        if resp.status_code == 200:
+            bot.reply_to(message, "✅ Куки работают! Статус 200.")
+        else:
+            bot.reply_to(message, f"❌ Куки не работают. Статус {resp.status_code}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 # ===== ТЕСТОВАЯ КОМАНДА =====
 @bot.message_handler(commands=['test'])
@@ -663,7 +689,6 @@ def monitor_playerok_chats():
                     for edge in edges:
                         node = edge["node"]
                         text = node.get("text", "")
-                        # Проверяем команду !code логин
                         if text.lower().startswith("!code"):
                             parts = text.split(maxsplit=1)
                             if len(parts) == 2:
@@ -681,13 +706,11 @@ def monitor_playerok_chats():
                                         reply_text = f"❌ У аккаунта {login} нет shared_secret"
                                 else:
                                     reply_text = f"❌ Аккаунт с логином {login} не найден"
-                                # Отправляем ответ в чат
                                 send_chat_message(chat_id, reply_text)
         except Exception as e:
             print(f"Ошибка мониторинга: {e}")
         time.sleep(10)
 
-# Запускаем мониторинг
 monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
 monitor_thread.start()
 
@@ -714,6 +737,7 @@ def menu_cmd(message):
         ("➕ Добавить чат", "add_chat"),
         ("➖ Удалить чат", "remove_chat"),
         ("📋 Список чатов", "list_chats"),
+        ("🍪 Проверить куки", "check_cookies"),
         ("🔍 Тест Playerok", "test_playerok"),
     ]
     for text, callback in btns:
@@ -742,6 +766,7 @@ def callback_handler(call):
         "add_chat": "Введите /addchat ID_чата",
         "remove_chat": "Введите /removechat ID_чата",
         "list_chats": "/listchats",
+        "check_cookies": "/checkcookies",
         "test_playerok": "/test",
     }
     if call.data in cmds:
@@ -776,6 +801,7 @@ def help_cmd(message):
 /addchat ID – добавить чат вручную
 /removechat ID – удалить чат из мониторинга
 /listchats – список отслеживаемых чатов
+/checkcookies – проверить работу кук Playerok
 /test – проверить работу с Playerok
 /menu – меню с кнопками
 
