@@ -23,7 +23,7 @@ PASSWORD = "_Axolotl_"
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
 
-# ===== КУКИ PLAYEROK =====
+# ===== КУКИ PLAYEROK (обнови при необходимости) =====
 PLAYEROK_COOKIES = {
     "__ddg1_": "UBzmNVPp3kE4YFKjtLKY",
     "__ddg10_": "1788558251",
@@ -233,73 +233,119 @@ def update_last_message_id(chat_id, last_id):
     conn.commit()
     conn.close()
 
-# ===== REST API PLAYEROK =====
-BASE_URL = "https://playerok.com"
-SESSION = requests.Session()
-SESSION.cookies.update(PLAYEROK_COOKIES)
-SESSION.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-})
-
+# ===== PLAYEROK GRAPHQL (точный запрос из браузера) =====
 def get_all_chats():
     logging.info("Вызвана функция get_all_chats()")
+    query = """
+    query Chats {
+      chats(first: 50) {
+        edges {
+          node {
+            id
+            type
+          }
+        }
+      }
+    }
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
+    payload = {"query": query}
     try:
-        endpoints = [
-            "/rest-api/chat/list",
-            "/rest-api/chats",
-            "/rest-api/conversations",
-            "/rest-api/inbox",
-        ]
-        for endpoint in endpoints:
-            url = f"{BASE_URL}{endpoint}"
-            resp = SESSION.get(url)
-            logging.info(f"🔍 GET {url} -> {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                logging.info(f"📦 Ответ: {json.dumps(data, indent=2)[:500]}")
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict):
-                    for key in ["chats", "items", "data", "list", "conversations"]:
-                        if key in data and isinstance(data[key], list):
-                            return data[key]
-                return []
+        resp = requests.post("https://playerok.com/graphql", json=payload, headers=headers, timeout=10)
+        logging.info(f"GraphQL ответ: {resp.status_code}")
+        if resp.status_code == 200:
+            data = resp.json()
+            logging.info(f"Получены данные: {json.dumps(data, indent=2)[:500]}")
+            if "data" in data and "chats" in data["data"]:
+                edges = data["data"]["chats"]["edges"]
+                chats = []
+                for edge in edges:
+                    node = edge["node"]
+                    if node.get("type") == "PM":  # только личные сообщения
+                        chats.append({"id": node["id"]})
+                return chats
         return []
     except Exception as e:
-        logging.error(f"Исключение в get_all_chats: {e}")
+        logging.error(f"Ошибка получения чатов: {e}")
         return []
 
 def get_chat_messages(chat_id, since_id=None):
+    """Получает сообщения чата через GraphQL"""
+    query = """
+    query chatMessages($chatId: String!, $after: String) {
+      chatMessages(chatId: $chatId, first: 20, after: $after) {
+        edges {
+          cursor
+          node {
+            id
+            text
+            createdAt
+            user {
+              id
+              username
+            }
+          }
+        }
+        pageInfo {
+          endCursor
+          hasNextPage
+        }
+      }
+    }
+    """
+    variables = {"chatId": chat_id}
+    if since_id:
+        variables["after"] = since_id
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
+    payload = {"query": query, "variables": variables}
     try:
-        url = f"{BASE_URL}/rest-api/chat/{chat_id}/messages"
-        params = {}
-        if since_id:
-            params["since"] = since_id
-        resp = SESSION.get(url, params=params)
+        resp = requests.post("https://playerok.com/graphql", json=payload, headers=headers, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            return data.get("messages", [])
-        else:
-            logging.error(f"Ошибка получения сообщений: {resp.status_code}")
-            return []
+            if "data" in data and "chatMessages" in data["data"]:
+                return data["data"]["chatMessages"]["edges"]
+        return []
     except Exception as e:
-        logging.error(f"Исключение в get_chat_messages: {e}")
+        logging.error(f"Ошибка получения сообщений: {e}")
         return []
 
 def send_chat_message(chat_id, text):
+    """Отправляет сообщение через GraphQL"""
+    mutation = """
+    mutation sendMessage($chatId: String!, $text: String!) {
+      sendMessage(chatId: $chatId, text: $text) {
+        id
+        text
+      }
+    }
+    """
+    variables = {"chatId": chat_id, "text": text}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
+    payload = {"query": mutation, "variables": variables}
     try:
-        url = f"{BASE_URL}/rest-api/chat/{chat_id}/send"
-        payload = {"text": text}
-        resp = SESSION.post(url, json=payload)
+        resp = requests.post("https://playerok.com/graphql", json=payload, headers=headers, timeout=10)
         if resp.status_code == 200:
-            return resp.json()
-        else:
-            logging.error(f"Ошибка отправки: {resp.status_code}")
-            return None
+            data = resp.json()
+            if "data" in data and "sendMessage" in data["data"]:
+                return data["data"]["sendMessage"]
+        return None
     except Exception as e:
-        logging.error(f"Исключение в send_chat_message: {e}")
+        logging.error(f"Ошибка отправки сообщения: {e}")
         return None
 
 # ===== БОТ =====
@@ -325,7 +371,7 @@ def schedule_end_rent(lot_id, chat_id, rent_end):
 # ===== ЗАЩИТА ПАРОЛЕМ =====
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
-    logging.info(f"Команда /start от пользователя {message.from_user.id}")
+    logging.info(f"Команда /start от {message.from_user.id}")
     user_id = message.from_user.id
     if user_id in verified_users:
         bot.reply_to(message, "✅ Доступ уже открыт. Используйте /menu.")
@@ -343,7 +389,242 @@ def check_password(message):
     else:
         bot.reply_to(message, "❌ Неверный пароль.")
 
-# ===== ОСТАЛЬНЫЕ КОМАНДЫ (добавлено логирование) =====
+# ===== ДОБАВЛЕНИЕ АККАУНТА =====
+@bot.message_handler(commands=['addaccount'])
+def add_account_start(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    user_data[user_id] = {'action': 'add_account', 'step': 'name'}
+    bot.reply_to(message, "Введите **имя** аккаунта:", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id]['action'] == 'add_account')
+def add_account_steps(message):
+    user_id = message.from_user.id
+    step = user_data[user_id].get('step')
+    if step == 'name':
+        user_data[user_id]['name'] = message.text.strip()
+        user_data[user_id]['step'] = 'login'
+        bot.reply_to(message, "Введите **логин**:")
+    elif step == 'login':
+        user_data[user_id]['login'] = message.text.strip()
+        user_data[user_id]['step'] = 'password'
+        bot.reply_to(message, "Введите **пароль**:")
+    elif step == 'password':
+        user_data[user_id]['password'] = message.text.strip()
+        user_data[user_id]['step'] = 'shared_secret'
+        bot.reply_to(message, "Введите **shared_secret**:")
+    elif step == 'shared_secret':
+        shared_secret = message.text.strip()
+        try:
+            add_account(user_data[user_id]['name'], user_data[user_id]['login'], user_data[user_id]['password'], shared_secret)
+            bot.reply_to(message, f"✅ Аккаунт **{user_data[user_id]['name']}** добавлен!")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Ошибка: {e}")
+        del user_data[user_id]
+
+# ===== ДОБАВЛЕНИЕ ЛОТА =====
+@bot.message_handler(commands=['addlot'])
+def add_lot_start(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    user_data[user_id] = {'action': 'add_lot', 'step': 'name'}
+    bot.reply_to(message, "Введите **название** лота:", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id]['action'] == 'add_lot')
+def add_lot_steps(message):
+    user_id = message.from_user.id
+    step = user_data[user_id].get('step')
+    if step == 'name':
+        user_data[user_id]['name'] = message.text.strip()
+        user_data[user_id]['step'] = 'link'
+        bot.reply_to(message, "Введите **ссылку** на лот:")
+    elif step == 'link':
+        user_data[user_id]['link'] = message.text.strip()
+        user_data[user_id]['step'] = 'account'
+        bot.reply_to(message, "Введите **имя аккаунта**:")
+    elif step == 'account':
+        account_name = message.text.strip()
+        lot_id = add_lot(user_data[user_id]['name'], user_data[user_id]['link'], account_name)
+        if lot_id:
+            bot.reply_to(message, f"✅ Лот **{user_data[user_id]['name']}** добавлен! ID: {lot_id}")
+        else:
+            bot.reply_to(message, f"❌ Аккаунт '{account_name}' не найден.")
+        del user_data[user_id]
+
+# ===== ПРОСМОТР АККАУНТОВ =====
+@bot.message_handler(commands=['accounts'])
+def show_accounts(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    accounts = get_all_accounts()
+    if not accounts:
+        bot.reply_to(message, "📭 Аккаунтов нет.")
+        return
+    text = "📋 **Аккаунты:**\n\n"
+    for acc in accounts:
+        text += f"🔹 **{acc[0]}.** {acc[1]} (логин: {acc[2]})\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+# ===== УДАЛЕНИЕ АККАУНТА =====
+@bot.message_handler(commands=['delaccount'])
+def delete_account_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        account_id = int(message.text.split()[1])
+        delete_account(account_id)
+        bot.reply_to(message, f"✅ Аккаунт {account_id} удалён.")
+    except:
+        bot.reply_to(message, "❌ Используй: /delaccount ID")
+
+# ===== ЛОТЫ =====
+@bot.message_handler(commands=['lots'])
+def show_lots_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    lots = get_all_lots()
+    if not lots:
+        bot.reply_to(message, "📭 Активных лотов нет")
+        return
+    text = "📋 **Лоты:**\n\n"
+    for lot in lots:
+        status = "✅ свободен" if lot[3] == 0 else "⏳ в аренде"
+        text += f"🔹 **{lot[0]}.** {lot[1]}\n   {lot[2]}\n   Аккаунт: {lot[4]}\n   Статус: {status}\n\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['dellot'])
+def delete_lot_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        lot_id = int(message.text.split()[1])
+        delete_lot(lot_id)
+        bot.reply_to(message, f"✅ Лот {lot_id} удалён.")
+    except:
+        bot.reply_to(message, "❌ Используй: /dellot ID")
+
+@bot.message_handler(commands=['rent'])
+def rent_lot_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        lot_id = int(message.text.split()[1])
+        lot = get_lot(lot_id)
+        if not lot:
+            bot.reply_to(message, f"❌ Лот {lot_id} не найден")
+            return
+        if lot[4] == 1:
+            bot.reply_to(message, f"❌ Лот {lot_id} уже в аренде")
+            return
+        rent_end = datetime.now() + timedelta(hours=1)
+        start_rent(lot_id, user_id, rent_end.isoformat())
+        bot.reply_to(message, f"✅ Аренда лота {lot_id} начата до {rent_end.strftime('%H:%M')}")
+        bot.send_message(message.chat.id, "🔄 Связанные лоты удалены.")
+        schedule_end_rent(lot_id, message.chat.id, rent_end)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
+
+# ===== КОМАНДЫ ПОКУПАТЕЛЯ =====
+@bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!login')
+def cmd_login(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    active = get_active_lot_for_user(user_id)
+    if not active:
+        bot.reply_to(message, "❌ У вас нет активной аренды.")
+        return
+    bot.reply_to(message, f"🔑 Логин: `{active[3]}`", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!password')
+def cmd_password(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    active = get_active_lot_for_user(user_id)
+    if not active:
+        bot.reply_to(message, "❌ У вас нет активной аренды.")
+        return
+    bot.reply_to(message, f"🔑 Пароль: `{active[4]}`", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == '!code')
+def cmd_code(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    active = get_active_lot_for_user(user_id)
+    if not active:
+        bot.reply_to(message, "❌ У вас нет активной аренды.")
+        return
+    shared_secret = active[5]
+    if not shared_secret:
+        bot.reply_to(message, "❌ shared_secret отсутствует.")
+        return
+    code = generate_steam_code(shared_secret)
+    if code:
+        bot.reply_to(message, f"`{code}`", parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Ошибка генерации кода")
+
+# ===== УПРАВЛЕНИЕ ЧАТАМИ =====
+@bot.message_handler(commands=['addchat'])
+def add_chat_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        chat_id = message.text.split()[1]
+        add_monitored_chat(chat_id)
+        bot.reply_to(message, f"✅ Чат {chat_id} добавлен.")
+    except:
+        bot.reply_to(message, "❌ Используй: /addchat ID")
+
+@bot.message_handler(commands=['removechat'])
+def remove_chat_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        chat_id = message.text.split()[1]
+        remove_monitored_chat(chat_id)
+        bot.reply_to(message, f"✅ Чат {chat_id} удалён.")
+    except:
+        bot.reply_to(message, "❌ Используй: /removechat ID")
+
+@bot.message_handler(commands=['listchats'])
+def list_chats_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    chats = get_monitored_chats()
+    if not chats:
+        bot.reply_to(message, "📭 Нет отслеживаемых чатов.")
+        return
+    text = "📋 **Отслеживаемые чаты:**\n\n"
+    for chat_id, last_id in chats:
+        text += f"🔹 {chat_id}\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
 @bot.message_handler(commands=['syncchats'])
 def sync_chats_cmd(message):
     logging.info(f"Команда /syncchats от {message.from_user.id}")
@@ -363,6 +644,7 @@ def sync_chats_cmd(message):
             added += 1
     bot.reply_to(message, f"✅ Добавлено {added} чатов.")
 
+# ===== ПРОВЕРКА КУК =====
 @bot.message_handler(commands=['checkcookies'])
 def check_cookies_cmd(message):
     logging.info(f"Команда /checkcookies от {message.from_user.id}")
@@ -370,8 +652,13 @@ def check_cookies_cmd(message):
     if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
+    # Проверяем доступность сайта с куками
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
     try:
-        resp = SESSION.get('https://playerok.com')
+        resp = requests.get('https://playerok.com', headers=headers, timeout=10)
         if resp.status_code == 200:
             bot.reply_to(message, "✅ Куки работают! Статус 200.")
         else:
@@ -379,9 +666,169 @@ def check_cookies_cmd(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {e}")
 
-# Остальные команды (addaccount, addlot, lots, rent, !code и т.д.) остаются без изменений,
-# но для краткости я их не копирую, так как они уже есть в предыдущих версиях.
-# Если нужен полный код со всеми командами, я дам ссылку на полный файл.
+# ===== ТЕСТ =====
+@bot.message_handler(commands=['test'])
+def test_playerok(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    chats = get_monitored_chats()
+    if not chats:
+        bot.reply_to(message, "❌ Сначала добавьте чаты через /syncchats или /addchat")
+        return
+    chat_id = chats[0][0]
+    msgs = get_chat_messages(chat_id)
+    if msgs:
+        bot.reply_to(message, f"✅ Получено {len(msgs)} сообщений из чата {chat_id}")
+    else:
+        bot.reply_to(message, f"❌ Не удалось получить сообщения из чата {chat_id}")
+
+# ===== ФОНОВЫЙ МОНИТОРИНГ =====
+def monitor_playerok_chats():
+    last_sync = time.time()
+    while True:
+        try:
+            if time.time() - last_sync > 600:
+                all_chats = get_all_chats()
+                for chat in all_chats:
+                    chat_id = chat.get('id') or chat.get('chatId')
+                    if chat_id:
+                        add_monitored_chat(chat_id)
+                last_sync = time.time()
+                logging.info("🔄 Чаты синхронизированы")
+            chats = get_monitored_chats()
+            for chat_id, last_id in chats:
+                edges = get_chat_messages(chat_id, since_id=last_id)
+                if edges:
+                    # Обновляем last_id на ID последнего сообщения
+                    new_last_id = edges[-1]['node']['id']
+                    update_last_message_id(chat_id, new_last_id)
+                    for edge in edges:
+                        node = edge['node']
+                        text = node.get('text', '')
+                        if text.lower().startswith('!code'):
+                            parts = text.split(maxsplit=1)
+                            if len(parts) == 2:
+                                login = parts[1].strip()
+                                account = get_account_by_login(login)
+                                if account:
+                                    shared_secret = account["shared_secret"]
+                                    if shared_secret:
+                                        code = generate_steam_code(shared_secret)
+                                        if code:
+                                            reply_text = f"Код для {login}: {code}"
+                                        else:
+                                            reply_text = f"❌ Ошибка генерации кода для {login}"
+                                    else:
+                                        reply_text = f"❌ У аккаунта {login} нет shared_secret"
+                                else:
+                                    reply_text = f"❌ Аккаунт с логином {login} не найден"
+                                send_chat_message(chat_id, reply_text)
+        except Exception as e:
+            logging.error(f"Ошибка мониторинга: {e}")
+        time.sleep(10)
+
+monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
+monitor_thread.start()
+
+# ===== МЕНЮ =====
+@bot.message_handler(commands=['menu'])
+def menu_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = [
+        ("➕ Добавить аккаунт", "add_account"),
+        ("➕ Добавить лот", "add_lot"),
+        ("📋 Аккаунты", "list_accounts"),
+        ("🗑 Удалить аккаунт", "delete_account"),
+        ("📋 Список лотов", "list_lots"),
+        ("🗑 Удалить лот", "delete_lot"),
+        ("⏳ Начать аренду", "rent_lot"),
+        ("🔑 Логин", "get_login"),
+        ("🔒 Пароль", "get_password"),
+        ("🔢 Код", "get_code"),
+        ("🔄 Синхронизировать чаты", "sync_chats"),
+        ("➕ Добавить чат", "add_chat"),
+        ("➖ Удалить чат", "remove_chat"),
+        ("📋 Список чатов", "list_chats"),
+        ("🍪 Проверить куки", "check_cookies"),
+        ("🔍 Тест Playerok", "test_playerok"),
+    ]
+    for text, callback in btns:
+        markup.add(types.InlineKeyboardButton(text, callback_data=callback))
+    bot.reply_to(message, "📌 **Главное меню**", reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.from_user.id
+    if user_id not in verified_users:
+        bot.answer_callback_query(call.id, "❌ Доступ запрещён.")
+        return
+    chat_id = call.message.chat.id
+    cmds = {
+        "add_account": "/addaccount",
+        "add_lot": "/addlot",
+        "list_accounts": "/accounts",
+        "delete_account": "Введите /delaccount ID",
+        "list_lots": "/lots",
+        "delete_lot": "Введите /dellot ID",
+        "rent_lot": "Введите /rent ID",
+        "get_login": None,
+        "get_password": None,
+        "get_code": None,
+        "sync_chats": "/syncchats",
+        "add_chat": "Введите /addchat ID_чата",
+        "remove_chat": "Введите /removechat ID_чата",
+        "list_chats": "/listchats",
+        "check_cookies": "/checkcookies",
+        "test_playerok": "/test",
+    }
+    if call.data in cmds:
+        if cmds[call.data]:
+            bot.send_message(chat_id, f"Введите {cmds[call.data]}")
+        else:
+            if call.data == "get_login":
+                cmd_login(call.message)
+            elif call.data == "get_password":
+                cmd_password(call.message)
+            elif call.data == "get_code":
+                cmd_code(call.message)
+    bot.answer_callback_query(call.id)
+
+# ===== /HELP =====
+@bot.message_handler(commands=['help'])
+def help_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    help_text = """
+📖 **Команды продавца:**
+/addaccount – добавить аккаунт (по шагам)
+/addlot – добавить лот (по шагам)
+/accounts – список аккаунтов
+/delaccount ID – удалить аккаунт
+/lots – список лотов
+/dellot ID – удалить лот
+/rent ID – начать аренду на 1 час
+/syncchats – синхронизировать чаты Playerok
+/addchat ID – добавить чат вручную
+/removechat ID – удалить чат
+/listchats – список чатов
+/checkcookies – проверить куки
+/test – тест Playerok
+/menu – меню
+
+📖 **Команды покупателя:**
+!login – логин
+!password – пароль
+!code – код Steam Guard
+    """
+    bot.reply_to(message, help_text, parse_mode='Markdown')
 
 # ===== FLASK =====
 app = flask.Flask(__name__)
