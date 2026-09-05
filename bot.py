@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from telebot import types
 
 # Импорт библиотеки для Playerok
-from PyPlayerokAPI import PlayerokAPI
+from playerok_requests_api import PlayerokAPI
 
 # ===== НАСТРОЙКИ =====
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
