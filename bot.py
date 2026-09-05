@@ -208,13 +208,11 @@ playerok_session.headers.update({
     'Accept': 'application/json',
 })
 
-# === Функции для работы с Playerok (заглушки, пока нет реальных запросов) ===
+# === Функции для работы с Playerok (заглушки) ===
 def get_playerok_chats():
-    """Получает список чатов"""
     try:
         resp = playerok_session.get('https://playerok.com')
         if resp.status_code == 200:
-            # Пока возвращаем тестовые данные
             return [{'id': 1, 'buyer': 'Тестовый покупатель', 'last_message': 'Куки работают'}]
         return []
     except Exception as e:
@@ -222,11 +220,9 @@ def get_playerok_chats():
         return []
 
 def get_playerok_messages(chat_id):
-    """Получает сообщения чата (заглушка)"""
     return [{'from': 'buyer', 'text': 'Пример сообщения'}]
 
 def send_playerok_message(chat_id, text):
-    """Отправляет сообщение в чат (заглушка)"""
     return f"Сообщение '{text}' отправлено (заглушка)"
 
 # ===== БОТ =====
@@ -462,6 +458,44 @@ def cmd_code(message):
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
 
+# ===== ТЕСТОВАЯ КОМАНДА /test =====
+@bot.message_handler(commands=['test'])
+def test_playerok(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+
+    url = "https://playerok.com/graphql"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
+    # Стандартный запрос на получение чатов (подберите правильный)
+    payload = {
+        "operationName": "getChats",
+        "query": """
+        query getChats {
+            chats {
+                id
+                user {
+                    username
+                }
+                last_message {
+                    text
+                }
+            }
+        }
+        """
+    }
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        bot.reply_to(message, f"📡 Статус: {resp.status_code}\nОтвет:\n{resp.text[:1500]}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
+
 # ===== ЧАТЫ PLAYEROK =====
 @bot.message_handler(commands=['chats'])
 def list_chats(message):
@@ -534,6 +568,7 @@ def menu_cmd(message):
         ("🔒 Пароль", "get_password"),
         ("🔢 Код", "get_code"),
         ("💬 Чаты", "list_chats"),
+        ("🔍 Тест Playerok", "test_playerok"),
     ]
     for text, callback in btns:
         markup.add(types.InlineKeyboardButton(text, callback_data=callback))
@@ -558,6 +593,7 @@ def callback_handler(call):
         "get_password": None,
         "get_code": None,
         "list_chats": "/chats",
+        "test_playerok": "/test",
     }
     if call.data in cmds:
         if cmds[call.data]:
@@ -590,6 +626,7 @@ def help_cmd(message):
 /chats – чаты Playerok
 /chat ID – открыть чат
 /reply ID Текст – ответить
+/test – проверить Playerok API
 /menu – меню с кнопками
 
 📖 **Команды покупателя:**
@@ -601,7 +638,6 @@ def help_cmd(message):
 
 # ===== ФОНОВЫЙ МОНИТОРИНГ ЧАТОВ =====
 def monitor_playerok_chats():
-    """Проверяет новые сообщения каждые 10 секунд"""
     while True:
         try:
             chats = get_playerok_chats()
@@ -613,7 +649,6 @@ def monitor_playerok_chats():
             print(f"Ошибка мониторинга: {e}")
         time.sleep(10)
 
-# Запускаем мониторинг в отдельном потоке (не блокирует основного бота)
 monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
 monitor_thread.start()
 
