@@ -9,11 +9,9 @@ import base64
 import struct
 import time
 import sqlite3
+import requests
 from datetime import datetime, timedelta
 from telebot import types
-
-# Импорт библиотеки для Playerok
-from playerok_requests_api import PlayerokAPI
 
 # ===== НАСТРОЙКИ =====
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
@@ -44,49 +42,6 @@ PLAYEROK_COOKIES = {
     "need_page_reload": "false",
     "tmr_detect": "0%7C1788558090367"
 }
-
-# ===== PLAYEROK API (реальный код) =====
-playerok = PlayerokAPI(cookies=PLAYEROK_COOKIES)
-
-def get_playerok_chats():
-    """Получает список чатов"""
-    try:
-        chats = playerok.get_chats()
-        result = []
-        for chat in chats:
-            result.append({
-                'id': chat['id'],
-                'buyer': chat.get('user', {}).get('username', 'Покупатель'),
-                'last_message': chat.get('last_message', {}).get('text', 'Нет сообщений')
-            })
-        return result
-    except Exception as e:
-        print(f"Ошибка получения чатов: {e}")
-        return []
-
-def get_playerok_messages(chat_id):
-    """Получает сообщения чата"""
-    try:
-        messages = playerok.get_messages(chat_id)
-        result = []
-        for msg in messages:
-            sender = 'buyer' if msg['user_id'] != playerok.user_id else 'seller'
-            result.append({
-                'from': sender,
-                'text': msg['text']
-            })
-        return result
-    except Exception as e:
-        print(f"Ошибка получения сообщений: {e}")
-        return []
-
-def send_playerok_message(chat_id, text):
-    """Отправляет сообщение в чат"""
-    try:
-        playerok.send_message(chat_id, text)
-        return f"Сообщение отправлено в чат {chat_id}"
-    except Exception as e:
-        return f"Ошибка отправки: {e}"
 
 # ===== АЛФАВИТ STEAM GUARD =====
 STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
@@ -161,6 +116,16 @@ def get_account_by_name(name):
     conn.close()
     return row
 
+def get_account_by_login(login):
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("SELECT id, name, login, password, shared_secret FROM accounts WHERE login=?", (login,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {'id': row[0], 'name': row[1], 'login': row[2], 'password': row[3], 'shared_secret': row[4]}
+    return None
+
 def delete_account(account_id):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
@@ -233,6 +198,36 @@ def delete_lot(lot_id):
     c.execute("DELETE FROM lots WHERE id=?", (lot_id,))
     conn.commit()
     conn.close()
+
+# ===== PLAYEROK (чистый requests) =====
+playerok_session = requests.Session()
+playerok_session.cookies.update(PLAYEROK_COOKIES)
+playerok_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+})
+
+# === Функции для работы с Playerok (заглушки, пока нет реальных запросов) ===
+def get_playerok_chats():
+    """Получает список чатов"""
+    try:
+        resp = playerok_session.get('https://playerok.com')
+        if resp.status_code == 200:
+            # Пока возвращаем тестовые данные
+            return [{'id': 1, 'buyer': 'Тестовый покупатель', 'last_message': 'Куки работают'}]
+        return []
+    except Exception as e:
+        print(f"Ошибка получения чатов: {e}")
+        return []
+
+def get_playerok_messages(chat_id):
+    """Получает сообщения чата (заглушка)"""
+    return [{'from': 'buyer', 'text': 'Пример сообщения'}]
+
+def send_playerok_message(chat_id, text):
+    """Отправляет сообщение в чат (заглушка)"""
+    return f"Сообщение '{text}' отправлено (заглушка)"
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
@@ -603,6 +598,24 @@ def help_cmd(message):
 !code – код Steam Guard
     """
     bot.reply_to(message, help_text, parse_mode='Markdown')
+
+# ===== ФОНОВЫЙ МОНИТОРИНГ ЧАТОВ =====
+def monitor_playerok_chats():
+    """Проверяет новые сообщения каждые 10 секунд"""
+    while True:
+        try:
+            chats = get_playerok_chats()
+            for chat in chats:
+                chat_id = chat['id']
+                # Здесь позже добавим реальную проверку новых сообщений
+                pass
+        except Exception as e:
+            print(f"Ошибка мониторинга: {e}")
+        time.sleep(10)
+
+# Запускаем мониторинг в отдельном потоке (не блокирует основного бота)
+monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
+monitor_thread.start()
 
 # ===== FLASK =====
 app = flask.Flask(__name__)
