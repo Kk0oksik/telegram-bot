@@ -21,7 +21,7 @@ PASSWORD = "_Axolotl_"
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
 
-# ===== КУКИ PLAYEROK =====
+# ===== КУКИ PLAYEROK (обновите при необходимости) =====
 PLAYEROK_COOKIES = {
     "__ddg1_": "UBzmNVPp3kE4YFKjtLKY",
     "__ddg10_": "1788558251",
@@ -87,7 +87,7 @@ def init_db():
                   rent_end TEXT,
                   FOREIGN KEY(account_id) REFERENCES accounts(id))''')
     c.execute('''CREATE TABLE IF NOT EXISTS monitored_chats
-                 (chat_id TEXT PRIMARY KEY, last_cursor TEXT)''')
+                 (chat_id TEXT PRIMARY KEY, last_message_id TEXT)''')
     conn.commit()
     conn.close()
 
@@ -205,7 +205,7 @@ def delete_lot(lot_id):
 def add_monitored_chat(chat_id):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO monitored_chats (chat_id, last_cursor) VALUES (?, NULL)", (chat_id,))
+    c.execute("INSERT OR IGNORE INTO monitored_chats (chat_id, last_message_id) VALUES (?, NULL)", (chat_id,))
     conn.commit()
     conn.close()
 
@@ -219,123 +219,80 @@ def remove_monitored_chat(chat_id):
 def get_monitored_chats():
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
-    c.execute("SELECT chat_id, last_cursor FROM monitored_chats")
+    c.execute("SELECT chat_id, last_message_id FROM monitored_chats")
     rows = c.fetchall()
     conn.close()
     return rows
 
-def update_last_cursor(chat_id, cursor):
+def update_last_message_id(chat_id, last_id):
     conn = sqlite3.connect('lots.db')
     c = conn.cursor()
-    c.execute("UPDATE monitored_chats SET last_cursor=? WHERE chat_id=?", (cursor, chat_id))
+    c.execute("UPDATE monitored_chats SET last_message_id=? WHERE chat_id=?", (last_id, chat_id))
     conn.commit()
     conn.close()
 
-# ===== PLAYEROK GRAPHQL =====
-GRAPHQL_URL = "https://playerok.com/graphql"
-
-def graphql_request(query, variables=None):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
-    }
-    payload = {"query": query}
-    if variables:
-        payload["variables"] = variables
-    try:
-        resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=10)
-        return resp.json()
-    except Exception as e:
-        print(f"GraphQL ошибка: {e}")
-        return None
-
-def get_chat_messages(chat_id, after_cursor=None):
-    """Получает сообщения чата, начиная с after_cursor (если указан)"""
-    query = """
-    query chatMessages($chatId: String!, $after: String) {
-      chatMessages(chatId: $chatId, first: 20, after: $after) {
-        edges {
-          cursor
-          node {
-            id
-            text
-            createdAt
-            user {
-              id
-              username
-            }
-          }
-        }
-        pageInfo {
-          endCursor
-          hasNextPage
-        }
-      }
-    }
-    """
-    variables = {"chatId": chat_id}
-    if after_cursor:
-        variables["after"] = after_cursor
-    result = graphql_request(query, variables)
-    if result and "data" in result:
-        return result["data"]["chatMessages"]
-    return None
-
-def send_chat_message(chat_id, text):
-    """Отправляет сообщение в чат"""
-    mutation = """
-    mutation sendMessage($chatId: String!, $text: String!) {
-      sendMessage(chatId: $chatId, text: $text) {
-        id
-        text
-      }
-    }
-    """
-    variables = {"chatId": chat_id, "text": text}
-    result = graphql_request(mutation, variables)
-    if result and "data" in result:
-        return result["data"]["sendMessage"]
-    return None
-
-def get_all_chats():
-    """Получает список всех личных чатов пользователя с отладкой"""
-    query = """
-    query Chats {
-      chats(first: 50) {
-        edges {
-          node {
-            id
-            type
-          }
-        }
-      }
-    }
-    """
-    result = graphql_request(query)
-    # Логируем полный ответ для отладки
-    print("🔍 GraphQL ответ на get_all_chats:", json.dumps(result, indent=2)[:500])
-    if result and "data" in result and "chats" in result["data"]:
-        edges = result["data"]["chats"]["edges"]
-        chats = []
-        for edge in edges:
-            node = edge["node"]
-            if node.get("type") == "PM":
-                chats.append({"id": node["id"]})
-        return chats
-    if result and "errors" in result:
-        print("❌ Ошибки GraphQL:", result["errors"])
-    return []
-
-# ===== ПРОВЕРКА КУК =====
-playerok_session = requests.Session()
-playerok_session.cookies.update(PLAYEROK_COOKIES)
-playerok_session.headers.update({
+# ===== REST API PLAYEROK =====
+BASE_URL = "https://playerok.com"
+SESSION = requests.Session()
+SESSION.cookies.update(PLAYEROK_COOKIES)
+SESSION.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Content-Type': 'application/json',
     'Accept': 'application/json',
 })
+
+def get_all_chats():
+    """Получает список всех чатов через REST API"""
+    try:
+        resp = SESSION.get(f"{BASE_URL}/rest-api/chat/list")
+        if resp.status_code == 200:
+            data = resp.json()
+            # Ожидаем, что в ответе есть список чатов
+            if "chats" in data:
+                return data["chats"]  # список объектов с id, title и т.д.
+            else:
+                # иногда ответ может быть в другом формате
+                return data.get("items", []) or []
+        else:
+            print(f"Ошибка получения чатов: {resp.status_code}, {resp.text}")
+            return []
+    except Exception as e:
+        print(f"Исключение в get_all_chats: {e}")
+        return []
+
+def get_chat_messages(chat_id, since_id=None):
+    """Получает сообщения чата, начиная с since_id (если указан)"""
+    try:
+        url = f"{BASE_URL}/rest-api/chat/{chat_id}/messages"
+        params = {}
+        if since_id:
+            params["since"] = since_id
+        resp = SESSION.get(url, params=params)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Возвращаем список сообщений (каждое должно иметь id, text, user, createdAt)
+            return data.get("messages", [])
+        else:
+            print(f"Ошибка получения сообщений: {resp.status_code}, {resp.text}")
+            return []
+    except Exception as e:
+        print(f"Исключение в get_chat_messages: {e}")
+        return []
+
+def send_chat_message(chat_id, text):
+    """Отправляет сообщение в чат"""
+    try:
+        url = f"{BASE_URL}/rest-api/chat/{chat_id}/send"
+        payload = {"text": text}
+        resp = SESSION.post(url, json=payload)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"Ошибка отправки: {resp.status_code}, {resp.text}")
+            return None
+    except Exception as e:
+        print(f"Исключение в send_chat_message: {e}")
+        return None
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
@@ -608,7 +565,7 @@ def list_chats_cmd(message):
         bot.reply_to(message, "📭 Нет отслеживаемых чатов.")
         return
     text = "📋 **Отслеживаемые чаты:**\n\n"
-    for chat_id, cursor in chats:
+    for chat_id, last_id in chats:
         text += f"🔹 {chat_id}\n"
     bot.reply_to(message, text, parse_mode='Markdown')
 
@@ -624,9 +581,11 @@ def sync_chats_cmd(message):
         return
     added = 0
     for chat in chats:
-        chat_id = chat['id']
-        add_monitored_chat(chat_id)
-        added += 1
+        # Получаем ID чата (может быть в разных полях)
+        chat_id = chat.get('id') or chat.get('chatId')
+        if chat_id:
+            add_monitored_chat(chat_id)
+            added += 1
     bot.reply_to(message, f"✅ Добавлено {added} чатов в мониторинг.")
 
 # ===== ПРОВЕРКА КУК =====
@@ -637,7 +596,7 @@ def check_cookies_cmd(message):
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
     try:
-        resp = playerok_session.get('https://playerok.com')
+        resp = SESSION.get('https://playerok.com')
         if resp.status_code == 200:
             bot.reply_to(message, "✅ Куки работают! Статус 200.")
         else:
@@ -645,21 +604,22 @@ def check_cookies_cmd(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {e}")
 
-# ===== ТЕСТОВАЯ КОМАНДА =====
+# ===== ТЕСТ =====
 @bot.message_handler(commands=['test'])
 def test_playerok(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
+    # Проверяем получение сообщений из первого отслеживаемого чата
     chats = get_monitored_chats()
     if not chats:
         bot.reply_to(message, "❌ Сначала добавьте чаты через /syncchats или /addchat")
         return
     chat_id = chats[0][0]
-    data = get_chat_messages(chat_id)
-    if data:
-        count = len(data.get("edges", []))
+    msgs = get_chat_messages(chat_id)
+    if msgs:
+        count = len(msgs)
         bot.reply_to(message, f"✅ Получено {count} сообщений из чата {chat_id}")
     else:
         bot.reply_to(message, f"❌ Не удалось получить сообщения из чата {chat_id}")
@@ -669,27 +629,29 @@ def monitor_playerok_chats():
     last_sync = time.time()
     while True:
         try:
-            # Синхронизация чатов каждые 5 минут
-            if time.time() - last_sync > 300:
+            # Синхронизация чатов каждые 10 минут
+            if time.time() - last_sync > 600:
                 all_chats = get_all_chats()
                 for chat in all_chats:
-                    chat_id = chat['id']
-                    add_monitored_chat(chat_id)
+                    chat_id = chat.get('id') or chat.get('chatId')
+                    if chat_id:
+                        add_monitored_chat(chat_id)
                 last_sync = time.time()
                 print("🔄 Чаты синхронизированы")
 
             # Мониторинг новых сообщений
             chats = get_monitored_chats()
-            for chat_id, last_cursor in chats:
-                data = get_chat_messages(chat_id, after=last_cursor)
-                if data and data.get("edges"):
-                    edges = data["edges"]
-                    new_cursor = edges[-1]["cursor"]
-                    update_last_cursor(chat_id, new_cursor)
-                    for edge in edges:
-                        node = edge["node"]
-                        text = node.get("text", "")
-                        if text.lower().startswith("!code"):
+            for chat_id, last_id in chats:
+                msgs = get_chat_messages(chat_id, since_id=last_id)
+                if msgs:
+                    # Обновляем last_id на ID последнего сообщения
+                    new_last_id = msgs[-1].get('id')
+                    if new_last_id:
+                        update_last_message_id(chat_id, new_last_id)
+                    # Обрабатываем новые сообщения
+                    for msg in msgs:
+                        text = msg.get('text', '')
+                        if text.lower().startswith('!code'):
                             parts = text.split(maxsplit=1)
                             if len(parts) == 2:
                                 login = parts[1].strip()
@@ -711,6 +673,7 @@ def monitor_playerok_chats():
             print(f"Ошибка мониторинга: {e}")
         time.sleep(10)
 
+# Запускаем мониторинг
 monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
 monitor_thread.start()
 
@@ -820,5 +783,7 @@ def health():
 
 if __name__ == '__main__':
     print("🚀 Бот запущен!")
+    # Небольшая задержка перед запуском, чтобы избежать конфликтов
+    time.sleep(2)
     threading.Thread(target=bot.infinity_polling).start()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
