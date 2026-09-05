@@ -86,6 +86,8 @@ def init_db():
                   rented_by INTEGER,
                   rent_end TEXT,
                   FOREIGN KEY(account_id) REFERENCES accounts(id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS monitored_chats
+                 (chat_id TEXT PRIMARY KEY, last_cursor TEXT)''')
     conn.commit()
     conn.close()
 
@@ -199,31 +201,130 @@ def delete_lot(lot_id):
     conn.commit()
     conn.close()
 
-# ===== PLAYEROK (чистый requests) =====
-playerok_session = requests.Session()
-playerok_session.cookies.update(PLAYEROK_COOKIES)
-playerok_session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-})
+# ===== ФУНКЦИИ ДЛЯ ОТСЛЕЖИВАЕМЫХ ЧАТОВ =====
+def add_monitored_chat(chat_id):
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO monitored_chats (chat_id, last_cursor) VALUES (?, NULL)", (chat_id,))
+    conn.commit()
+    conn.close()
 
-# === Функции для работы с Playerok (заглушки) ===
-def get_playerok_chats():
+def remove_monitored_chat(chat_id):
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM monitored_chats WHERE chat_id=?", (chat_id,))
+    conn.commit()
+    conn.close()
+
+def get_monitored_chats():
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_id, last_cursor FROM monitored_chats")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def update_last_cursor(chat_id, cursor):
+    conn = sqlite3.connect('lots.db')
+    c = conn.cursor()
+    c.execute("UPDATE monitored_chats SET last_cursor=? WHERE chat_id=?", (cursor, chat_id))
+    conn.commit()
+    conn.close()
+
+# ===== PLAYEROK GRAPHQL =====
+GRAPHQL_URL = "https://playerok.com/graphql"
+
+def graphql_request(query, variables=None):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
+    }
+    payload = {"query": query}
+    if variables:
+        payload["variables"] = variables
     try:
-        resp = playerok_session.get('https://playerok.com')
-        if resp.status_code == 200:
-            return [{'id': 1, 'buyer': 'Тестовый покупатель', 'last_message': 'Куки работают'}]
-        return []
+        resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=10)
+        return resp.json()
     except Exception as e:
-        print(f"Ошибка получения чатов: {e}")
-        return []
+        print(f"GraphQL ошибка: {e}")
+        return None
 
-def get_playerok_messages(chat_id):
-    return [{'from': 'buyer', 'text': 'Пример сообщения'}]
+def get_chat_messages(chat_id, after_cursor=None):
+    """Получает сообщения чата, начиная с after_cursor (если указан)"""
+    query = """
+    query chatMessages($chatId: String!, $after: String) {
+      chatMessages(chatId: $chatId, first: 20, after: $after) {
+        edges {
+          cursor
+          node {
+            id
+            text
+            createdAt
+            user {
+              id
+              username
+            }
+          }
+        }
+        pageInfo {
+          endCursor
+          hasNextPage
+        }
+      }
+    }
+    """
+    variables = {"chatId": chat_id}
+    if after_cursor:
+        variables["after"] = after_cursor
+    result = graphql_request(query, variables)
+    if result and "data" in result:
+        return result["data"]["chatMessages"]
+    return None
 
-def send_playerok_message(chat_id, text):
-    return f"Сообщение '{text}' отправлено (заглушка)"
+def send_chat_message(chat_id, text):
+    """Отправляет сообщение в чат"""
+    mutation = """
+    mutation sendMessage($chatId: String!, $text: String!) {
+      sendMessage(chatId: $chatId, text: $text) {
+        id
+        text
+      }
+    }
+    """
+    variables = {"chatId": chat_id, "text": text}
+    result = graphql_request(mutation, variables)
+    if result and "data" in result:
+        return result["data"]["sendMessage"]
+    return None
+
+# ===== НОВАЯ ФУНКЦИЯ: ПОЛУЧИТЬ ВСЕ ЧАТЫ =====
+def get_all_chats():
+    """Получает список всех личных чатов пользователя"""
+    query = """
+    query Chats {
+      chats(first: 50) {
+        edges {
+          node {
+            id
+            type
+          }
+        }
+      }
+    }
+    """
+    result = graphql_request(query)
+    if result and "data" in result and "chats" in result["data"]:
+        edges = result["data"]["chats"]["edges"]
+        chats = []
+        for edge in edges:
+            node = edge["node"]
+            # Фильтруем только личные сообщения (не поддержка, не уведомления)
+            if node.get("type") == "PM":
+                chats.append({"id": node["id"]})
+        return chats
+    return []
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
@@ -458,95 +559,137 @@ def cmd_code(message):
     else:
         bot.reply_to(message, "❌ Ошибка генерации кода")
 
-# ===== ТЕСТОВАЯ КОМАНДА /test =====
+# ===== УПРАВЛЕНИЕ ОТСЛЕЖИВАЕМЫМИ ЧАТАМИ =====
+@bot.message_handler(commands=['addchat'])
+def add_chat_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        chat_id = message.text.split()[1]
+        add_monitored_chat(chat_id)
+        bot.reply_to(message, f"✅ Чат {chat_id} добавлен в мониторинг.")
+    except:
+        bot.reply_to(message, "❌ Используй: /addchat ID_чата")
+
+@bot.message_handler(commands=['removechat'])
+def remove_chat_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    try:
+        chat_id = message.text.split()[1]
+        remove_monitored_chat(chat_id)
+        bot.reply_to(message, f"✅ Чат {chat_id} удалён из мониторинга.")
+    except:
+        bot.reply_to(message, "❌ Используй: /removechat ID_чата")
+
+@bot.message_handler(commands=['listchats'])
+def list_chats_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    chats = get_monitored_chats()
+    if not chats:
+        bot.reply_to(message, "📭 Нет отслеживаемых чатов.")
+        return
+    text = "📋 **Отслеживаемые чаты:**\n\n"
+    for chat_id, cursor in chats:
+        text += f"🔹 {chat_id}\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+# ===== НОВАЯ КОМАНДА: СИНХРОНИЗАЦИЯ ВСЕХ ЧАТОВ =====
+@bot.message_handler(commands=['syncchats'])
+def sync_chats_cmd(message):
+    user_id = message.from_user.id
+    if user_id not in verified_users:
+        bot.reply_to(message, "❌ Доступ запрещён.")
+        return
+    chats = get_all_chats()
+    if not chats:
+        bot.reply_to(message, "❌ Не удалось получить список чатов. Проверьте куки Playerok.")
+        return
+    added = 0
+    for chat in chats:
+        chat_id = chat['id']
+        add_monitored_chat(chat_id)
+        added += 1
+    bot.reply_to(message, f"✅ Добавлено {added} чатов в мониторинг.")
+
+# ===== ТЕСТОВАЯ КОМАНДА =====
 @bot.message_handler(commands=['test'])
 def test_playerok(message):
     user_id = message.from_user.id
     if user_id not in verified_users:
         bot.reply_to(message, "❌ Доступ запрещён.")
         return
-
-    url = "https://playerok.com/graphql"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Cookie': '; '.join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
-    }
-    # Стандартный запрос на получение чатов (подберите правильный)
-    payload = {
-        "operationName": "getChats",
-        "query": """
-        query getChats {
-            chats {
-                id
-                user {
-                    username
-                }
-                last_message {
-                    text
-                }
-            }
-        }
-        """
-    }
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        bot.reply_to(message, f"📡 Статус: {resp.status_code}\nОтвет:\n{resp.text[:1500]}")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
-
-# ===== ЧАТЫ PLAYEROK =====
-@bot.message_handler(commands=['chats'])
-def list_chats(message):
-    user_id = message.from_user.id
-    if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён.")
-        return
-    chats = get_playerok_chats()
+    chats = get_monitored_chats()
     if not chats:
-        bot.reply_to(message, "📭 Чатов нет или ошибка подключения.")
+        bot.reply_to(message, "❌ Сначала добавьте чаты через /syncchats или /addchat")
         return
-    text = "💬 **Список чатов:**\n\n"
-    for chat in chats:
-        text += f"🔹 **{chat['id']}.** {chat['buyer']}\n   {chat['last_message']}\n"
-    bot.reply_to(message, text + "\nИспользуй `/chat ID` для просмотра.", parse_mode='Markdown')
+    chat_id = chats[0][0]
+    data = get_chat_messages(chat_id)
+    if data:
+        count = len(data.get("edges", []))
+        bot.reply_to(message, f"✅ Получено {count} сообщений из чата {chat_id}")
+    else:
+        bot.reply_to(message, f"❌ Не удалось получить сообщения из чата {chat_id}")
 
-@bot.message_handler(commands=['chat'])
-def open_chat(message):
-    user_id = message.from_user.id
-    if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён.")
-        return
-    try:
-        chat_id = int(message.text.split()[1])
-        msgs = get_playerok_messages(chat_id)
-        text = f"💬 **Чат {chat_id}:**\n\n"
-        for msg in msgs:
-            sender = "Покупатель" if msg['from'] == 'buyer' else "Вы"
-            text += f"**{sender}:** {msg['text']}\n"
-        bot.reply_to(message, text, parse_mode='Markdown')
-        bot.reply_to(message, f"Ответить: `/reply {chat_id} Текст`")
-    except:
-        bot.reply_to(message, "❌ Используй: /chat ID")
+# ===== ФОНОВЫЙ МОНИТОРИНГ =====
+def monitor_playerok_chats():
+    last_sync = time.time()
+    while True:
+        try:
+            # Синхронизация чатов каждые 5 минут
+            if time.time() - last_sync > 300:
+                all_chats = get_all_chats()
+                for chat in all_chats:
+                    chat_id = chat['id']
+                    add_monitored_chat(chat_id)
+                last_sync = time.time()
+                print("🔄 Чаты синхронизированы")
 
-@bot.message_handler(commands=['reply'])
-def reply_to_chat(message):
-    user_id = message.from_user.id
-    if user_id not in verified_users:
-        bot.reply_to(message, "❌ Доступ запрещён.")
-        return
-    try:
-        parts = message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            bot.reply_to(message, "❌ Используй: /reply ID Текст")
-            return
-        chat_id = int(parts[1])
-        text = parts[2]
-        result = send_playerok_message(chat_id, text)
-        bot.reply_to(message, f"✅ {result}")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+            # Мониторинг новых сообщений
+            chats = get_monitored_chats()
+            for chat_id, last_cursor in chats:
+                data = get_chat_messages(chat_id, after=last_cursor)
+                if data and data.get("edges"):
+                    edges = data["edges"]
+                    new_cursor = edges[-1]["cursor"]
+                    update_last_cursor(chat_id, new_cursor)
+                    for edge in edges:
+                        node = edge["node"]
+                        text = node.get("text", "")
+                        # Проверяем команду !code логин
+                        if text.lower().startswith("!code"):
+                            parts = text.split(maxsplit=1)
+                            if len(parts) == 2:
+                                login = parts[1].strip()
+                                account = get_account_by_login(login)
+                                if account:
+                                    shared_secret = account["shared_secret"]
+                                    if shared_secret:
+                                        code = generate_steam_code(shared_secret)
+                                        if code:
+                                            reply_text = f"Код для {login}: {code}"
+                                        else:
+                                            reply_text = f"❌ Ошибка генерации кода для {login}"
+                                    else:
+                                        reply_text = f"❌ У аккаунта {login} нет shared_secret"
+                                else:
+                                    reply_text = f"❌ Аккаунт с логином {login} не найден"
+                                # Отправляем ответ в чат
+                                send_chat_message(chat_id, reply_text)
+        except Exception as e:
+            print(f"Ошибка мониторинга: {e}")
+        time.sleep(10)
+
+# Запускаем мониторинг
+monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
+monitor_thread.start()
 
 # ===== МЕНЮ =====
 @bot.message_handler(commands=['menu'])
@@ -567,7 +710,10 @@ def menu_cmd(message):
         ("🔑 Логин", "get_login"),
         ("🔒 Пароль", "get_password"),
         ("🔢 Код", "get_code"),
-        ("💬 Чаты", "list_chats"),
+        ("🔄 Синхронизировать чаты", "sync_chats"),
+        ("➕ Добавить чат", "add_chat"),
+        ("➖ Удалить чат", "remove_chat"),
+        ("📋 Список чатов", "list_chats"),
         ("🔍 Тест Playerok", "test_playerok"),
     ]
     for text, callback in btns:
@@ -592,7 +738,10 @@ def callback_handler(call):
         "get_login": None,
         "get_password": None,
         "get_code": None,
-        "list_chats": "/chats",
+        "sync_chats": "/syncchats",
+        "add_chat": "Введите /addchat ID_чата",
+        "remove_chat": "Введите /removechat ID_чата",
+        "list_chats": "/listchats",
         "test_playerok": "/test",
     }
     if call.data in cmds:
@@ -623,10 +772,11 @@ def help_cmd(message):
 /lots – список лотов
 /dellot ID – удалить лот
 /rent ID – начать аренду на 1 час
-/chats – чаты Playerok
-/chat ID – открыть чат
-/reply ID Текст – ответить
-/test – проверить Playerok API
+/syncchats – синхронизировать все чаты Playerok
+/addchat ID – добавить чат вручную
+/removechat ID – удалить чат из мониторинга
+/listchats – список отслеживаемых чатов
+/test – проверить работу с Playerok
 /menu – меню с кнопками
 
 📖 **Команды покупателя:**
@@ -635,22 +785,6 @@ def help_cmd(message):
 !code – код Steam Guard
     """
     bot.reply_to(message, help_text, parse_mode='Markdown')
-
-# ===== ФОНОВЫЙ МОНИТОРИНГ ЧАТОВ =====
-def monitor_playerok_chats():
-    while True:
-        try:
-            chats = get_playerok_chats()
-            for chat in chats:
-                chat_id = chat['id']
-                # Здесь позже добавим реальную проверку новых сообщений
-                pass
-        except Exception as e:
-            print(f"Ошибка мониторинга: {e}")
-        time.sleep(10)
-
-monitor_thread = threading.Thread(target=monitor_playerok_chats, daemon=True)
-monitor_thread.start()
 
 # ===== FLASK =====
 app = flask.Flask(__name__)
