@@ -12,15 +12,18 @@ import sqlite3
 from datetime import datetime, timedelta
 from telebot import types
 
+# Импорт библиотеки для Playerok
+from playerok_api import PlayerokAPI
+
 # ===== НАСТРОЙКИ =====
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 PASSWORD = "_Axolotl_"
 
-# === ВАШ ТЕЛЕГРАМ ID (бот сразу вас узнаёт) ===
+# Ваш Telegram ID (бот сразу вас узнаёт)
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
 
-# ===== КУКИ PLAYEROK (скопированы из расширения) =====
+# ===== КУКИ PLAYEROK =====
 PLAYEROK_COOKIES = {
     "__ddg1_": "UBzmNVPp3kE4YFKjtLKY",
     "__ddg10_": "1788558251",
@@ -41,6 +44,49 @@ PLAYEROK_COOKIES = {
     "need_page_reload": "false",
     "tmr_detect": "0%7C1788558090367"
 }
+
+# ===== PLAYEROK API (реальный код) =====
+playerok = PlayerokAPI(cookies=PLAYEROK_COOKIES)
+
+def get_playerok_chats():
+    """Получает список чатов"""
+    try:
+        chats = playerok.get_chats()
+        result = []
+        for chat in chats:
+            result.append({
+                'id': chat['id'],
+                'buyer': chat.get('user', {}).get('username', 'Покупатель'),
+                'last_message': chat.get('last_message', {}).get('text', 'Нет сообщений')
+            })
+        return result
+    except Exception as e:
+        print(f"Ошибка получения чатов: {e}")
+        return []
+
+def get_playerok_messages(chat_id):
+    """Получает сообщения чата"""
+    try:
+        messages = playerok.get_messages(chat_id)
+        result = []
+        for msg in messages:
+            sender = 'buyer' if msg['user_id'] != playerok.user_id else 'seller'
+            result.append({
+                'from': sender,
+                'text': msg['text']
+            })
+        return result
+    except Exception as e:
+        print(f"Ошибка получения сообщений: {e}")
+        return []
+
+def send_playerok_message(chat_id, text):
+    """Отправляет сообщение в чат"""
+    try:
+        playerok.send_message(chat_id, text)
+        return f"Сообщение отправлено в чат {chat_id}"
+    except Exception as e:
+        return f"Ошибка отправки: {e}"
 
 # ===== АЛФАВИТ STEAM GUARD =====
 STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
@@ -187,36 +233,6 @@ def delete_lot(lot_id):
     c.execute("DELETE FROM lots WHERE id=?", (lot_id,))
     conn.commit()
     conn.close()
-
-# ===== PLAYEROK (реальный код через requests) =====
-import requests
-
-def get_playerok_chats():
-    try:
-        url = "https://playerok.com/api/graphql"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Type": "application/json",
-            "Cookie": "; ".join([f"{k}={v}" for k, v in PLAYEROK_COOKIES.items()])
-        }
-        # Запрос для получения списка чатов (заглушка, реальный запрос нужно подбирать)
-        # Но пока вернём тестовые данные, чтобы убедиться, что куки работают
-        # В реальности нужно сделать правильный GraphQL-запрос.
-        response = requests.get("https://playerok.com", headers=headers)
-        if response.status_code == 200:
-            # Если получили страницу, значит куки работают
-            return [{"id": 1, "buyer": "Тестовый покупатель", "last_message": "Куки работают"}]
-        else:
-            return []
-    except Exception as e:
-        print(f"Ошибка Playerok: {e}")
-        return []
-
-def get_playerok_messages(chat_id):
-    return [{"from": "buyer", "text": "Пример сообщения"}]
-
-def send_playerok_message(chat_id, text):
-    return f"Сообщение '{text}' отправлено (заглушка)"
 
 # ===== БОТ =====
 bot = telebot.TeleBot(TOKEN)
@@ -552,7 +568,6 @@ def callback_handler(call):
         if cmds[call.data]:
             bot.send_message(chat_id, f"Введите {cmds[call.data]}")
         else:
-            # Вызываем соответствующую команду
             if call.data == "get_login":
                 cmd_login(call.message)
             elif call.data == "get_password":
