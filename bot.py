@@ -17,7 +17,6 @@ from telebot import types
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 PASSWORD = "_Axolotl_"
 
-# Ваш Telegram ID
 MY_USER_ID = 6724886955
 verified_users = {MY_USER_ID}
 
@@ -241,11 +240,10 @@ SESSION.headers.update({
     'Accept': 'application/json',
 })
 
-# ===== НОВАЯ ВЕРСИЯ get_all_chats() С ОТЛАДКОЙ =====
+# ===== НОВАЯ ФУНКЦИЯ С ОТЛАДКОЙ =====
 def get_all_chats():
     """Получает список всех чатов через REST API с отладкой"""
     try:
-        # Пробуем несколько эндпоинтов (вдруг какой-то сработает)
         endpoints = [
             "/rest-api/chat/list",
             "/rest-api/chats",
@@ -259,22 +257,19 @@ def get_all_chats():
             if resp.status_code == 200:
                 data = resp.json()
                 print(f"📦 Ответ: {json.dumps(data, indent=2)[:500]}")
-                # Проверяем структуру ответа
                 if isinstance(data, list):
                     return data
                 if isinstance(data, dict):
-                    # Ищем ключи, которые могут содержать список чатов
                     for key in ["chats", "items", "data", "list", "conversations"]:
                         if key in data and isinstance(data[key], list):
                             return data[key]
-                return []  # если структура не распознана
+                return []
         return []
     except Exception as e:
         print(f"Исключение в get_all_chats: {e}")
         return []
 
 def get_chat_messages(chat_id, since_id=None):
-    """Получает сообщения чата через REST API"""
     try:
         url = f"{BASE_URL}/rest-api/chat/{chat_id}/messages"
         params = {}
@@ -292,7 +287,6 @@ def get_chat_messages(chat_id, since_id=None):
         return []
 
 def send_chat_message(chat_id, text):
-    """Отправляет сообщение в чат через REST API"""
     try:
         url = f"{BASE_URL}/rest-api/chat/{chat_id}/send"
         payload = {"text": text}
